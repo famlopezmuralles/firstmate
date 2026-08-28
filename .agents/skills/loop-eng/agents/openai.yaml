@@ -1,0 +1,4 @@
+interface:
+  display_name: "DECADA Loop Engineering"
+  short_description: "Run one human-gated DECADA sprint loop"
+  default_prompt: "Use $loop-eng to propose and run one human-gated DECADA sprint execution."
