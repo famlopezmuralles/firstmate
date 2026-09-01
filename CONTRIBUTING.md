@@ -15,7 +15,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 
 ## Workflow
 
-1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:kunchenguid/firstmate.git`).
+1. Fork [`kunchenguid/firstmate`](https://github.com/kunchenguid/firstmate), then keep the canonical parent at `upstream` and your writable fork at `origin` so maintenance starts from the parent's default branch and delivery targets the fork.
 2. Create a branch and make your changes.
 3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (firstmate expects **no-mistakes v1.31.2+**; without a fork, plain `no-mistakes init` still works for maintainers with push access).
 4. Commit your changes.
