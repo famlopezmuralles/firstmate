@@ -744,6 +744,8 @@ test_spawn_bare_harness_no_model_effort_flag() {
   [ "$(meta_field "$meta" model)" = default ] || fail "bare-tokens: meta model not default (got '$(meta_field "$meta" model)')"
   [ "$(meta_field "$meta" effort)" = default ] || fail "bare-tokens: meta effort not default (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
+  assert_contains "$launch" "CLAUDE_CODE_SEND_FEEDBACK=0 claude" \
+    "bare-tokens: Claude secondmate launch did not disable feedback drafts"
   assert_not_contains "$launch" "--model" "bare-tokens: launch must not carry a --model flag"
   assert_not_contains "$launch" "--effort" "bare-tokens: launch must not carry an --effort flag"
   pass "C2 spawn: a bare harness-only secondmate-harness file launches with no model/effort flag (backward-compat)"
@@ -767,7 +769,7 @@ test_spawn_secondmate_harness_model_token() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-token: meta model not opus (got '$(meta_field "$meta" model)')"
   [ "$(meta_field "$meta" effort)" = default ] || fail "model-token: meta effort not default (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --model 'opus'" \
+  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
     "model-token: launch did not carry --model opus"
   assert_not_contains "$launch" "--effort" "model-token: launch must not carry an --effort flag"
   pass "C3 spawn: config/secondmate-harness's model token threads --model into the launch and meta"
@@ -789,7 +791,7 @@ test_spawn_secondmate_harness_model_and_effort_tokens() {
   [ "$(meta_field "$meta" model)" = opus ] || fail "model-effort-tokens: meta model not opus"
   [ "$(meta_field "$meta" effort)" = high ] || fail "model-effort-tokens: meta effort not high (got '$(meta_field "$meta" effort)')"
   launch=$(cat "$launchlog")
-  assert_contains "$launch" "claude --dangerously-skip-permissions --model 'opus' --effort 'high'" \
+  assert_contains "$launch" "claude --dangerously-skip-permissions --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus' --effort 'high'" \
     "model-effort-tokens: launch did not carry both --model opus and --effort high"
   pass "C4 spawn: config/secondmate-harness's model+effort tokens thread into the launch and meta"
 }
@@ -959,7 +961,14 @@ test_spawn_fallback_chain_and_crew_scout_unaffected() {
   fakebin=$(make_launch_capturing_tmux "$w/tmux-crew")
   fm_git_worktree "$proj" "$wt" "wt-crew"
   mkdir -p "$home/data/$id" "$home/projects" "$home/state"
-  printf 'brief\n' > "$home/data/$id/brief.md"
+  cat > "$home/data/$id/brief.md" <<'EOF'
+# Task
+## Captain's intent
+Exercise an ordinary crew launch.
+
+## Firstmate spec
+Verify secondmate harness settings do not affect it.
+EOF
   : > "$launchlog"
   PATH="$fakebin:$BASE_PATH" TMUX="fake,1,0" CLAUDECODE=1 \
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
@@ -998,6 +1007,7 @@ new_world() {
     [ "$dispatch_ignore" = no ] || printf 'config/crew-dispatch.json\n'
     printf 'config/crew-harness\nconfig/secondmate-harness\nconfig/backlog-backend\n'
     printf 'config/backend\nconfig/herdr-presentation-spaces\nconfig/startup-memory-budget\n'
+    printf 'config/claude-permission-mode\n'
   } > "$w/main/.gitignore"
   printf 'v1\n' > "$w/main/AGENTS.md"
   printf 'r1\n' > "$w/main/README.md"
@@ -1056,6 +1066,10 @@ if [ -n "${FM_FAKE_TMUX_LOG:-}" ]; then
   printf '%s\n' "$*" >> "$FM_FAKE_TMUX_LOG"
 fi
 case "$*" in
+  list-windows*)
+    sed -n 's/^window=[^:]*://p' "${FM_HOME:?}"/state/*.meta
+    exit 0
+    ;;
   *display-message*'#{pane_current_command}'*) printf '%s\n' codex; exit 0 ;;
   *display-message*'#{pane_id}'*) printf '%s\n' '%1'; exit 0 ;;
   *display-message*'#{cursor_y}'*) printf '%s\n' 0; exit 0 ;;
@@ -1088,7 +1102,7 @@ SH
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
-  printf '%s\n' 'no-mistakes version v1.31.2 (fake)'
+  printf '%s\n' 'no-mistakes version v1.46.0 (fake)'
   exit 0
 fi
 exit 0
@@ -1141,6 +1155,20 @@ run_config_push() {
       FM_SEND_SETTLE=0 \
       "$ROOT/bin/fm-config-push.sh"
   fi
+}
+
+# Config-reread pointers now ride fm-send's durable steering inbox: the typed
+# channel carries only the constant doorbell, while each pointer message is a
+# sequenced record under the parent state's <task>.inbox/. Print every recorded
+# steer body in sequence order (one line per pointer-only message), read
+# through the production owner so no format knowledge is duplicated here.
+inbox_stream() {  # <parent-state-dir> <task-id>
+  local rec
+  for rec in "$1/$2.inbox"/*.msg; do
+    [ -e "$rec" ] || continue
+    bash -c '. "$1"; fm_task_inbox_body "$2"' _ "$ROOT/bin/fm-task-inbox-lib.sh" "$rec"
+    printf '\n'
+  done
 }
 
 reread_instruction_path() {
@@ -1364,6 +1392,52 @@ test_bootstrap_sweep_materializes_and_inherits_memory_default() {
 }
 
 # config/backend: present and absent primary state converges exactly.
+# config/claude-permission-mode=auto reaches a Claude SECONDMATE launch too: the
+# same template swap as a crewmate, with model/effort untouched.
+test_spawn_secondmate_claude_permission_mode_auto() {
+  local w sm meta launchlog launch out status
+  w="$TMP_ROOT/spawn-claude-permmode"
+  sm="$w/sm"
+  launchlog="$w/launch.log"
+  mkdir -p "$w/home/config"
+  printf 'claude opus\n' > "$w/home/config/secondmate-harness"
+  printf 'auto\n' > "$w/home/config/claude-permission-mode"
+  make_seeded_home "$sm" sm
+
+  out=$(spawn_secondmate_capture "$w" sm "$sm" "$launchlog" 2>&1); status=$?
+  expect_code 0 "$status" "claude secondmate spawn under claude-permission-mode=auto should succeed"
+
+  meta="$w/home/state/sm.meta"
+  [ "$(meta_field "$meta" harness)" = claude ] || fail "permmode: meta harness not claude"
+  launch=$(cat "$launchlog")
+  assert_contains "$launch" "claude --permission-mode auto --settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' --model 'opus'" \
+    "permmode: secondmate launch did not swap the permission flag while keeping --model"
+  assert_not_contains "$launch" "--dangerously-skip-permissions" "permmode: secondmate launch must not request bypass mode"
+  pass "C2b spawn: config/claude-permission-mode=auto reaches a Claude secondmate launch"
+}
+
+# The file is a captain-wide safety preference, so it inherits like
+# config/backend: present values converge exactly and primary absence mirrors.
+test_claude_permission_mode_inheritance_present_and_absent() {
+  local w head out err status
+  w=$(new_world permmode-inherit)
+  head=$(git -C "$w/main" rev-parse HEAD)
+  add_sm_worktree "$w" sm "$head"
+
+  printf 'auto\n' > "$w/home/config/claude-permission-mode"
+  err="$w/permmode-inherit.err"
+  out=$(run_config_push "$w" 2>"$err"); status=$?
+  expect_code 0 "$status" "claude-permission-mode present push should succeed"
+  assert_contains "$out" "claude-permission-mode: pushed" "present value should report pushed"
+  [ "$(cat "$w/sm/config/claude-permission-mode")" = auto ] || fail "claude-permission-mode present value not pushed"
+
+  rm -f "$w/home/config/claude-permission-mode"
+  out=$(run_config_push "$w" 2>"$err"); status=$?
+  expect_code 0 "$status" "claude-permission-mode absence push should succeed"
+  [ -e "$w/sm/config/claude-permission-mode" ] && fail "claude-permission-mode not removed on primary absence"
+  pass "B12c claude-permission-mode inheritance: present values and primary absence converge exactly"
+}
+
 test_backend_inheritance_present_and_absent() {
   local w head out err status instruction
   w=$(new_world backend-inherit)
@@ -1486,7 +1560,7 @@ test_bootstrap_rereads_after_partial_propagation() {
   instruction=$(reread_instruction_path "$w/sm") || fail "partial bootstrap reread instruction missing"
   assert_present "$instruction" "partial bootstrap propagation did not write a reread instruction"
   pointer="CONFIG_REREAD: $(reread_instruction_path "$w/sm")"
-  assert_contains "$(cat "$log")" "$pointer" \
+  assert_contains "$(inbox_stream "$w/home/state" sm)" "$pointer" \
     "partial bootstrap propagation did not route the instruction pointer"
   pass "B11 bootstrap rereads completed config writes after partial propagation"
 }
@@ -1545,7 +1619,7 @@ test_config_push_propagates_reports_without_ff_or_nudge() {
   assert_contains "$(cat "$instruction")" $'-----BEGIN config/backend-----\ntmux\n-----END config/backend-----' \
     "config-push reread must include exact backend bytes"
   [ ! -s "$err" ] || fail "clean config push wrote unexpected stderr: $(cat "$err")"
-  assert_contains "$(cat "$log")" "[fm-from-firstmate]" \
+  assert_contains "$(inbox_stream "$w/home/state" sm)" "[fm-from-firstmate]" \
     "config reread must use the marked routed secondmate path"
 
   : > "$log"
@@ -1658,7 +1732,7 @@ test_config_push_rereads_after_partial_propagation() {
   instruction=$(reread_instruction_path "$w/sm") || fail "partial propagation reread instruction missing"
   assert_present "$instruction" "partial propagation did not write a reread instruction"
   pointer="CONFIG_REREAD: $(reread_instruction_path "$w/sm")"
-  assert_contains "$(cat "$log")" "$pointer" \
+  assert_contains "$(inbox_stream "$w/home/state" sm)" "$pointer" \
     "partial propagation did not route the instruction pointer"
   pass "B14 config-push rereads completed config writes after partial propagation"
 }
@@ -1777,13 +1851,15 @@ test_config_reread_per_home_changed_sets_and_exact_bytes() {
   assert_not_contains "$(cat "$instr_b")" $'pi\n' \
     "beta instruction must not leak alpha-only stale harness bytes as a standalone scalar block incorrectly"
 
-  # Routed send used the from-firstmate marker and carried only the pointer.
+  # Routed send used the from-firstmate marker and carried only the pointer,
+  # read from alpha's durable steer records (the typed channel now carries only
+  # the constant doorbell, which never inlines message content).
   pointer="CONFIG_REREAD: $(reread_instruction_path "$w/alpha")"
-  assert_contains "$(cat "$log")" "[fm-from-firstmate]" "reread send must be marked"
-  assert_contains "$(cat "$log")" "$pointer" "reread send must point to the durable instruction file"
-  assert_not_contains "$(cat "$log")" '"harness": "grok"' "sent message must not inline multiline JSON"
-  assert_not_contains "$(cat "$log")" $'\n  "default"' "sent message must not contain embedded newlines"
-  assert_not_contains "$(cat "$log")" "Default worker" "sent message must not summarize"
+  assert_contains "$(inbox_stream "$w/home/state" alpha)" "[fm-from-firstmate]" "reread send must be marked"
+  assert_contains "$(inbox_stream "$w/home/state" alpha)" "$pointer" "reread send must point to the durable instruction file"
+  assert_not_contains "$(inbox_stream "$w/home/state" alpha)" '"harness": "grok"' "sent message must not inline multiline JSON"
+  assert_not_contains "$(inbox_stream "$w/home/state" alpha)" "Default worker" "sent message must not summarize"
+  assert_not_contains "$(cat "$log")" '"harness": "grok"' "the typed doorbell must not inline multiline JSON"
   pass "B15 config reread is per-home, exact-byte, ordered, and pointer-only"
 }
 
@@ -1851,12 +1927,17 @@ test_config_reread_isolation_and_absent_and_send_failure() {
   assert_not_contains "$(cat "$w/beta/state/.fm-inherited-config-reread-absent")" "config/crew-harness" \
     "helper must omit unchanged items"
 
-  # Send failure becomes a retryable diagnostic and non-zero exit.
+  # Send failure becomes a retryable diagnostic and non-zero exit. On the
+  # inbox plane the real local failure is an unwritable steer record (a
+  # keystroke failure alone no longer fails a durably enqueued pointer), so
+  # replace each inbox dir with a plain file that blocks the enqueue.
+  rm -rf "$w/home/state/alpha.inbox" "$w/home/state/beta.inbox"
+  : > "$w/home/state/alpha.inbox"
+  : > "$w/home/state/beta.inbox"
   printf 'claude\n' > "$w/home/config/crew-harness"
   err="$w/config-reread-send-fail.err"
   out=$(PATH="$(make_fake_toolchain "$w"):$BASE_PATH" \
     FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" FM_SEND_SETTLE=0 \
-    FM_FAKE_TMUX_FAIL_LITERAL=1 \
     "$ROOT/bin/fm-config-push.sh" 2>"$err"); status=$?
   expect_code 1 "$status" "send failure should make config-push exit non-zero"
   assert_contains "$out" "CONFIG_REREAD: secondmate" "send failure diagnostic missing"
@@ -1877,7 +1958,6 @@ test_config_reread_isolation_and_absent_and_send_failure() {
   err="$w/config-reread-send-fail-second.err"
   out2=$(PATH="$(make_fake_toolchain "$w"):$BASE_PATH" \
     FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" FM_SEND_SETTLE=0 \
-    FM_FAKE_TMUX_FAIL_LITERAL=1 \
     "$ROOT/bin/fm-config-push.sh" 2>"$err"); status2=$?
   expect_code 1 "$status2" "second send failure should make config-push exit non-zero"
   assert_not_contains "$out2" "config-reread: sent" \
@@ -1891,17 +1971,18 @@ test_config_reread_isolation_and_absent_and_send_failure() {
 
   # A normal later push retries the durable pointers even though propagation is
   # unchanged, then clears every marker after delivery succeeds.
+  rm -f "$w/home/state/alpha.inbox" "$w/home/state/beta.inbox"
   retry_log="$w/config-reread-send-retry.tmux.log"
   retry_out=$(run_config_push "$w" "$retry_log" 2>"$err"); retry_status=$?
   expect_code 0 "$retry_status" "send failure should be retryable"
   assert_contains "$retry_out" "config-reread: sent" \
     "retry should report the reread as sent"
   retry_pointer="CONFIG_REREAD: $(reread_instruction_path "$w/beta")"
-  assert_contains "$(cat "$retry_log")" "$retry_pointer" \
+  assert_contains "$(inbox_stream "$w/home/state" beta)" "$retry_pointer" \
     "retry did not resend the durable pointer"
-  assert_contains "$(cat "$retry_log")" "CONFIG_REREAD: $first_instr" \
+  assert_contains "$(inbox_stream "$w/home/state" alpha)" "CONFIG_REREAD: $first_instr" \
     "retry did not resend the first pending generation"
-  assert_contains "$(cat "$retry_log")" "$second_pointer" \
+  assert_contains "$(inbox_stream "$w/home/state" alpha)" "$second_pointer" \
     "retry did not resend the second pending generation"
   assert_no_reread_pending "$w/alpha"
   assert_no_reread_pending "$w/beta"
@@ -1951,7 +2032,7 @@ SH
     "successful publication retry should report delivery"
   instr=$(reread_instruction_path "$w/alpha") \
     || fail "publication retry did not publish an instruction"
-  assert_contains "$(cat "$log")" "CONFIG_REREAD: $instr" \
+  assert_contains "$(inbox_stream "$w/home/state" alpha)" "CONFIG_REREAD: $instr" \
     "publication retry did not send the durable pointer"
   assert_no_reread_retry_stages "$w/home" alpha
   pass "B20 config reread publication failures retain exact generations for retry"
@@ -2002,8 +2083,8 @@ SH
   expect_code 0 "$retry_status" "a later changed push should retry an instruction-write failure"
   assert_contains "$retry_out" "config-reread: sent" \
     "later changed push did not deliver the retained exact generation"
-  old_instr=$(grep 'CONFIG_REREAD:' "$log" | head -n 1 | sed 's/.*CONFIG_REREAD: //')
-  new_instr=$(grep 'CONFIG_REREAD:' "$log" | tail -n 1 | sed 's/.*CONFIG_REREAD: //')
+  old_instr=$(inbox_stream "$w/home/state" sm | grep 'CONFIG_REREAD:' | head -n 1 | sed 's/.*CONFIG_REREAD: //')
+  new_instr=$(inbox_stream "$w/home/state" sm | grep 'CONFIG_REREAD:' | tail -n 1 | sed 's/.*CONFIG_REREAD: //')
   [ -n "$old_instr" ] && [ -n "$new_instr" ] && [ "$old_instr" != "$new_instr" ] \
     || fail "later changed push did not deliver both generations"
   instr="$old_instr"
@@ -2071,8 +2152,8 @@ SH
   log="$w/config-reread-exact-temp-fallback.tmux.log"
   retry_out=$(run_config_push "$w" "$log" 2>/dev/null); retry_status=$?
   expect_code 0 "$retry_status" "later push should deliver retained exact temporary bytes"
-  old_instr=$(grep 'CONFIG_REREAD:' "$log" | head -n 1 | sed 's/.*CONFIG_REREAD: //')
-  new_instr=$(grep 'CONFIG_REREAD:' "$log" | tail -n 1 | sed 's/.*CONFIG_REREAD: //')
+  old_instr=$(inbox_stream "$w/home/state" sm | grep 'CONFIG_REREAD:' | head -n 1 | sed 's/.*CONFIG_REREAD: //')
+  new_instr=$(inbox_stream "$w/home/state" sm | grep 'CONFIG_REREAD:' | tail -n 1 | sed 's/.*CONFIG_REREAD: //')
   [ -n "$old_instr" ] && [ -n "$new_instr" ] && [ "$old_instr" != "$new_instr" ] \
     || fail "later push did not deliver both exact generations"
   assert_contains "$(cat "$old_instr")" \
@@ -2141,8 +2222,10 @@ SH
   [ "$first_instr" != "$second_instr" ] || fail "concurrent pushes reused a generation"
   [ "$(cat "$w/sm/config/crew-harness")" = two ] \
     || fail "concurrent pushes did not converge the latest config bytes"
-  first_line=$(grep -n -F "CONFIG_REREAD: $first_instr" "$log" | head -n 1 | cut -d: -f1)
-  second_line=$(grep -n -F "CONFIG_REREAD: $second_instr" "$log" | head -n 1 | cut -d: -f1)
+  # Delivery order is now the durable enqueue order: the steering-inbox
+  # sequence numbers are the serialization evidence the typed log used to be.
+  first_line=$(inbox_stream "$w/home/state" sm | grep -n -F "CONFIG_REREAD: $first_instr" | head -n 1 | cut -d: -f1)
+  second_line=$(inbox_stream "$w/home/state" sm | grep -n -F "CONFIG_REREAD: $second_instr" | head -n 1 | cut -d: -f1)
   [ -n "$first_line" ] && [ -n "$second_line" ] && [ "$first_line" -lt "$second_line" ] \
     || fail "concurrent pushes delivered generations out of order"
   pass "B21 config reread serializes concurrent propagation and delivery"
@@ -2174,7 +2257,7 @@ test_config_reread_full_retry_queue_drains_before_new_push() {
   [ "$(cat "$w/sm/config/crew-harness")" = new ] \
     || fail "the new config generation did not propagate after retry draining"
   assert_no_reread_retry_stages "$w/home" sm
-  pointer_count=$(grep -c 'CONFIG_REREAD:' "$log" 2>/dev/null || true)
+  pointer_count=$(inbox_stream "$w/home/state" sm | grep -c 'CONFIG_REREAD:' || true)
   [ "$pointer_count" -ge 17 ] \
     || fail "full retry queue did not deliver all pending generations before the new one"
   pass "B22 full config reread retry queues drain before new publication"
@@ -2200,15 +2283,19 @@ test_config_reread_cleanup_runs_after_mixed_delivery_failure() {
       || fail "could not mark mixed-delivery generation pending"
   done
   fakebin=$(make_fake_toolchain "$w")
-  mv "$fakebin/tmux" "$fakebin/tmux.real"
-  cat > "$fakebin/tmux" <<SH
+  # Fail only the .9999-fail generation's delivery, at the layer that can now
+  # fail: the durable inbox enqueue. The staged steer record carries that
+  # generation's pointer path in its body, so a content-matching mv wrapper
+  # rejects exactly that one atomic publish and nothing else.
+  real_mv=$(command -v mv)
+  cat > "$fakebin/mv" <<SH
 #!/usr/bin/env bash
-  case "\$*" in
-  *send-keys*'.9999-fail'*) exit 1 ;;
-esac
-exec "$fakebin/tmux.real" "\$@"
+if [ -f "\${1:-}" ] && grep -q '\.9999-fail' "\${1:-}" 2>/dev/null; then
+  exit 1
+fi
+exec "$real_mv" "\$@"
 SH
-  chmod +x "$fakebin/tmux"
+  chmod +x "$fakebin/mv"
   report="$w/empty-reread.report"
   : > "$report"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
@@ -2364,7 +2451,7 @@ test_config_reread_bootstrap_path_and_spawn_flexibility() {
   [ "$(cat "$w/sm/config/crew-harness")" = codex ] || fail "bootstrap did not push harness"
   instr=$(reread_instruction_path "$w/sm") || fail "bootstrap reread instruction missing"
   assert_present "$instr" "bootstrap must write a config reread instruction when config changed"
-  assert_contains "$(cat "$log")" "[fm-from-firstmate]" \
+  assert_contains "$(inbox_stream "$w/home/state" sm)" "[fm-from-firstmate]" \
     "bootstrap config reread must use routed secondmate send"
   assert_contains "$(cat "$instr")" \
     $'-----BEGIN config/crew-harness-----\ncodex\n-----END config/crew-harness-----' \
@@ -2548,6 +2635,8 @@ test_bootstrap_sweep_propagates_when_tracked_current
 test_bootstrap_sweep_defers_dispatch_on_stale_unignored_home
 test_bootstrap_sweep_materializes_and_inherits_memory_default
 test_backend_inheritance_present_and_absent
+test_spawn_secondmate_claude_permission_mode_auto
+test_claude_permission_mode_inheritance_present_and_absent
 test_presentation_inheritance_default_on_and_opt_out
 test_bootstrap_sweep_surfaces_config_propagation_failure
 test_bootstrap_rereads_after_partial_propagation
