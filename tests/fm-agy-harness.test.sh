@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Behavior tests for the agy (Antigravity CLI) detection arm in fm-harness.sh.
 #
-# agy is not yet a verified crewmate/scout adapter - it has no bin/fm-spawn.sh
-# launch template, no bin/fm-control-lib.sh entry, and no busy-state wiring.
-# This file pins only the detection facts that are proven and shipped:
+# agy is a verified crewmate/scout adapter (see bin/fm-spawn.sh's launch
+# template, bin/fm-control-lib.sh's entry, and bin/fm-agy-turnend-hook.sh's
+# busy-state wiring). This file pins only the detection facts:
 #   1. ANTIGRAVITY_AGENT=1 is agy's own child/tool-process marker, and it
 #      outranks BOTH an inherited CLAUDECODE and an inherited CURSOR_AGENT,
 #      because agy clears neither (verified live on agy 1.2.12: a tool process

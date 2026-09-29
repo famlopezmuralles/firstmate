@@ -1650,6 +1650,25 @@ launch_template() {
     # when a supported effort is requested, since a second --config-override
     # would silently discard the first (confirmed live).
     rovo) printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS __ROVOBIN__ run --yolo __MODELFLAG____ROVOCONFIGOVERRIDE__' ;;
+    # agy (Antigravity CLI): -i/--prompt-interactive starts the supervised
+    # interactive session with an initial prompt, auto-submitted exactly like
+    # claude/gemini/grok (verified live, agy 1.2.13). --dangerously-skip-permissions
+    # auto-approves every tool call in BOTH print and interactive mode
+    # (verified live: a Bash+Read tool pair ran with no permission prompt);
+    # bin/fm-agy-trust.sh pre-registers the worktree so the workspace-trust
+    # dialog never renders in the first place, so no yolo-equivalent for that
+    # dialog specifically is needed here.
+    # agy clears NEITHER an inherited CLAUDECODE nor CURSOR_AGENT from its own
+    # tool children (bin/fm-harness.sh's detect_own header), so the foreign
+    # primary markers are cleared here as defense in depth alongside that
+    # script's marker-ordering mitigation, matching omp's full clearing set.
+    # --effort accepts low|medium|high on the installed default model
+    # (gemini-3.8-flash); max is listed in --help but verified live to error
+    # ("gemini-3.8-flash has no \"max\" effort"), so the shared xhigh/max tiers
+    # are omitted in effort_flag_for_harness below rather than passed unverified.
+    agy)
+      printf '%s' 'env -u CLAUDECODE -u PI_CODING_AGENT -u GROK_AGENT -u FM_PI_HARNESS -u GEMINI_CLI -u CURSOR_AGENT -u CURSOR_INVOKED_AS agy --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__-i "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      ;;
     *) return 1 ;;
   esac
 }
@@ -1691,17 +1710,20 @@ case "$ARG3" in
     ;;
 esac
 
-# muse and gemini are verified as CREWMATE/SCOUT adapters only. A secondmate is
-# a firstmate instance, so it needs a primary supervision protocol.
+# muse, gemini, and agy are verified as CREWMATE/SCOUT adapters only. A
+# secondmate is a firstmate instance, so it needs a primary supervision
+# protocol.
 # gemini has none: docs/supervision-protocols/ carries no gemini wake protocol
 # and this task verified only crewmate-side launch, busy state, interrupt, and
 # exit, so a gemini secondmate is refused rather than stood up on an unverified
 # supervision path. muse has none either, and its
 # Claude-compatible hook dialect explicitly rejects the model-reawakening and
 # asyncRewake handlers that firstmate's primary turn-end supervision is built on
-# (muse 0.1.0-R708.1). Refusing here keeps that gap loud instead of standing up a
-# secondmate whose supervision cycle could never be armed.
-if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ]; }; then
+# (muse 0.1.0-R708.1). agy has none either, for the same reason as gemini: only
+# crewmate-side launch, trust, busy state, interrupt, and exit were verified,
+# with no wake protocol of its own. Refusing here keeps that gap loud instead
+# of standing up a secondmate whose supervision cycle could never be armed.
+if [ "$KIND" = secondmate ] && { [ "$HARNESS" = muse ] || [ "$HARNESS" = gemini ] || [ "$HARNESS" = agy ]; }; then
   echo "error: $HARNESS is a verified crewmate/scout adapter only and cannot run a secondmate; it has no primary supervision protocol. Select a harness verified for secondmates." >&2
   exit 1
 fi
@@ -1902,7 +1924,7 @@ model_flag_for_harness() {
   local harness=$1 model=$2
   [ -n "$model" ] && [ "$model" != default ] || return 0
   case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp)
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy)
       printf -- '--model %s ' "$(shell_quote "$model")"
       ;;
   esac
@@ -1932,6 +1954,16 @@ effort_flag_for_harness() {
       # than passing a known-bad value.
       case "$effort" in
         low|medium|high) printf -- '--reasoning-effort %s ' "$(shell_quote "$effort")" ;;
+      esac
+      ;;
+    agy)
+      # agy 1.2.13 --effort accepts low|medium|high on the installed default
+      # model; --help also lists max, but it was verified live to error
+      # ("gemini-3.8-flash has no \"max\" effort") against the default model,
+      # so xhigh/max are omitted here rather than passed unverified, the same
+      # conservative-omit posture as grok just above.
+      case "$effort" in
+        low|medium|high) printf -- '--effort %s ' "$(shell_quote "$effort")" ;;
       esac
       ;;
     pi|pi-signed)
@@ -3236,6 +3268,17 @@ if [ "$KIND" != secondmate ]; then
         exit 1
       fi
       ;;
+    agy*)
+      # Same reasoning as Claude just above; bin/fm-agy-trust.sh owns the
+      # structural scope test and the trust-store mechanics. agy's dialog
+      # defaults to the safe "Yes, I trust this folder" choice (unlike
+      # Claude's), but the spawn still refuses on a failed registration rather
+      # than launch into an unattended dialog at all.
+      if ! "$FM_ROOT/bin/fm-agy-trust.sh" "$WT" "$PROJ_ABS" >/dev/null; then
+        echo "error: could not pre-register agy workspace trust for $WT; refusing to launch an agy worker that would sit at the trust dialog; inspect window $T" >&2
+        exit 1
+      fi
+      ;;
   esac
 fi
 
@@ -3283,9 +3326,9 @@ if [ "$KIND" != secondmate ]; then
   # embedded into each adapter's wiring so an event from a superseded
   # incarnation is rejected as stale. Grok and rovo stay on their isolated
   # rendered-tail fallbacks and standalone Kimi stays unknown until
-  # fm_busy_kimi_verified opens, so none of the three is armed here. Gemini IS
-  # armed: its BeforeAgent / AfterAgent / SessionEnd hooks are a verified
-  # open-close pair.
+  # fm_busy_kimi_verified opens, so none of the three is armed here. Gemini and
+  # agy ARE armed: gemini's BeforeAgent / AfterAgent / SessionEnd hooks and
+  # agy's PreInvocation / Stop global hooks are each a verified open-close pair.
   BUSY_GEN=
   case "$HARNESS" in
     codex*)
@@ -3304,6 +3347,15 @@ if [ "$KIND" != secondmate ]; then
       [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
       ;;
     gemini)
+      if [ "$RAW_LAUNCH" -eq 0 ]; then
+        BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
+          echo "error: failed to arm the busy-state contract for $ID" >&2
+          exit 1
+        }
+        [ "$RELAUNCH" -ne 1 ] || RELAUNCH_REPLACEMENT_BUSY_GEN=$BUSY_GEN
+      fi
+      ;;
+    agy)
       if [ "$RAW_LAUNCH" -eq 0 ]; then
         BUSY_GEN=$("$FM_ROOT/bin/fm-busy-event.sh" arm "$STATE_REAL" "$ID") || {
           echo "error: failed to arm the busy-state contract for $ID" >&2
@@ -3638,6 +3690,42 @@ EOF
       printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.kimi-turnend-token"
       printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-kimi-turnend"
       exclude_path '.fm-kimi-turnend'
+      ;;
+    agy)
+      if [ "$RAW_LAUNCH" -eq 0 ]; then
+      # agy's global PreInvocation/Stop hooks (bin/fm-agy-turnend-hook.sh) are
+      # inert unless the CURRENT conversation's reported workspace holds this
+      # task's token pointer and the token resolves through Firstmate's
+      # private registry. Unlike grok/kimi's turnend-only registry, agy's
+      # registry entry carries the full fm-busy-event.sh invocation (its own
+      # absolute path, state dir, id, and gen) because agy's semantic source is
+      # a real busy/idle pair, not just a turn-end touch, and the hook script
+      # cannot receive per-task literals the way a per-task settings file
+      # (claude, gemini) can - the hook file itself is shared machine-wide.
+      # Installed on every spawn (idempotent no-op once already installed) so
+      # a brand-new home needs no separate provisioning step; a failed install
+      # refuses the spawn rather than launch a worker with unreachable busy
+      # wiring.
+      "$FM_ROOT/bin/fm-agy-turnend-hook.sh" install || {
+        echo "error: refusing agy spawn because the global turn-end hook could not be installed safely" >&2
+        exit 1
+      }
+      AGY_AUTH_DIR="$HOME/.gemini/config/fm-turn-end.d"
+      old_umask=$(umask)
+      umask 077
+      auth_file=$(mktemp "$AGY_AUTH_DIR/fm.XXXXXXXXXXXX")
+      umask "$old_umask"
+      {
+        printf 'busy_event=%s\n' "$FM_ROOT/bin/fm-busy-event.sh"
+        printf 'state=%s\n' "$STATE_REAL"
+        printf 'id=%s\n' "$ID"
+        printf 'gen=%s\n' "$BUSY_GEN"
+        printf 'turnend=%s\n' "$TURNEND"
+      } > "$auth_file"
+      printf '%s\n' "${auth_file##*/}" > "$STATE/$ID.agy-turnend-token"
+      printf 'token=%s\n' "${auth_file##*/}" > "$WT/.fm-agy-turnend"
+      exclude_path '.fm-agy-turnend'
+      fi
       ;;
   esac
 fi

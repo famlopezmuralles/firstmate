@@ -217,6 +217,7 @@ Each pass polled `state/<id>.busy-state` while a real turn ran.
 | Codex | codex-cli 0.145.0 | None usable | See below; classifies `unknown codex-unverified`. |
 | Kimi (standalone) | not installed | None usable | No binary on `PATH`, so the gate stays closed and it classifies `unknown kimi-unverified`. |
 | Grok | 0.2.112 | Isolated rendered-tail fallback | Retained unconverted; the approved audit could not credit a live structured-lifecycle run. |
+| agy | 1.2.13 | Global `PreInvocation`/`Stop` hooks, guarded per task by a worktree pointer and a private registry (`bin/fm-agy-turnend-hook.sh`) | Live trace on a real multi-step brief: seed `busy source=fm-spawn`, repeated `busy source=agy-hook event=pre-invocation` across the turn, then `idle source=agy-hook event=stop` at natural completion with the turn-end marker touched; a manual Escape interrupt fires no closing hook (Claude's same limitation). Full trace and the one-off `workspacePaths` anomaly are in [runtime-backends.md](runtime-backends.md#antigravity-cli-agy). |
 
 Codex was probed two ways, both refused:
 

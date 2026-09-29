@@ -63,7 +63,7 @@ fm_control_verb_allowed() {  # <verb>
 # than guessed at, exactly as a spawn on it would be.
 fm_control_harness_supported() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp) return 0 ;;
+    claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy) return 0 ;;
   esac
   return 1
 }
@@ -90,12 +90,13 @@ fm_control_harness_family() {  # <recorded-harness>
     gemini*) printf 'gemini' ;;
     muse*) printf 'muse' ;;
     rovo*) printf 'rovo' ;;
+    agy*) printf 'agy' ;;
     *) return 1 ;;
   esac
 }
 
-# Which task kinds an adapter is verified to run. muse, gemini, and rovo are
-# crewmate/scout adapters only: none has a primary supervision protocol,
+# Which task kinds an adapter is verified to run. muse, gemini, rovo, and agy
+# are crewmate/scout adapters only: none has a primary supervision protocol,
 # and bin/fm-spawn.sh refuses a --secondmate launch on any of them. The control
 # plane asks this BEFORE it stops anything, so an incompatible relaunch target is
 # refused while the current agent is still running rather than after it has
@@ -104,7 +105,7 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
   local harness=${1-} kind=${2-}
   fm_control_harness_supported "$harness" || return 1
   case "$harness" in
-    muse|gemini|rovo) [ "$kind" != secondmate ] || return 1 ;;
+    muse|gemini|rovo|agy) [ "$kind" != secondmate ] || return 1 ;;
   esac
   return 0
 }
@@ -116,10 +117,14 @@ fm_control_harness_supports_kind() {  # <harness> <kind>
 # rovo cancels on a single Escape too, printing "Agent cancelled" (verified,
 # 202609.1.2). omp (Oh My Pi) shares Pi's single Escape, empty composer
 # afterwards, and /quit exit (verified omp 18.1.2 in a PTY, re-verified 18.1.11
-# through Herdr).
+# through Herdr). agy cancels on a single Escape too, printing "Interrupted ·
+# What should Antigravity CLI do instead?" (verified live, agy 1.2.13); no
+# Stop hook fires on this path (the same limitation Claude has), so the busy
+# record is left for fm-send's legacy idle/fm-interrupt path exactly as Claude's
+# comment on that path already describes.
 fm_control_interrupt_key() {  # <harness>
   case "${1-}" in
-    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|rovo) printf 'Escape' ;;
+    claude|codex|opencode|pi|pi-signed|omp|kimi|cursor|gemini|muse|rovo|agy) printf 'Escape' ;;
     grok) printf 'C-c' ;;
     *) return 1 ;;
   esac
@@ -130,7 +135,7 @@ fm_control_interrupt_key() {  # <harness>
 fm_control_interrupt_repeat() {  # <harness>
   case "${1-}" in
     opencode) printf '2' ;;
-    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo) printf '1' ;;
+    claude|codex|pi|pi-signed|omp|grok|kimi|cursor|gemini|muse|rovo|agy) printf '1' ;;
     *) return 1 ;;
   esac
 }
@@ -145,13 +150,15 @@ fm_control_interrupt_repeat() {  # <harness>
 # follow-up` placeholder, so it needs no clear key. gemini was checked the
 # same way and also does not repollute: after a single Escape it prints
 # `Request cancelled.` and its composer shows only the `Type your message
-# or @path/to/file` placeholder. Prints the key or nothing;
+# or @path/to/file` placeholder. agy was checked the same way and also does
+# not repollute: after a single Escape its composer is empty at the idle
+# `? for shortcuts` footer. Prints the key or nothing;
 # a harness with no verified mechanics returns nonzero, matching the tables
 # above.
 fm_control_interrupt_clear_key() {  # <harness>
   case "${1-}" in
     muse) printf 'C-u' ;;
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo) ;;
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy) ;;
     *) return 1 ;;
   esac
 }
@@ -166,7 +173,11 @@ fm_control_interrupt_ack_source() {  # <harness>
     # rovo's TUI prints "Agent cancelled" on Escape, but for parity with
     # claude/cursor this stays 'none': the ack is a rendered string, not a
     # recorded state source, and rovo has no busy wiring to confirm against.
-    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo) printf 'none' ;;
+    # agy prints "Interrupted · What should Antigravity CLI do instead?" on
+    # Escape, but its Stop hook does not fire on this path (verified live), so
+    # there is no recorded state source to confirm against either; 'none' for
+    # the same reason as rovo.
+    claude|codex|opencode|pi|pi-signed|omp|grok|kimi|cursor|gemini|rovo|agy) printf 'none' ;;
     *) return 1 ;;
   esac
 }
@@ -175,7 +186,7 @@ fm_control_interrupt_ack_source() {  # <harness>
 fm_control_exit_command() {  # <harness>
   case "${1-}" in
     claude|opencode|grok|kimi|cursor|muse|rovo) printf '/exit' ;;
-    codex|pi|pi-signed|omp|gemini) printf '/quit' ;;
+    codex|pi|pi-signed|omp|gemini|agy) printf '/quit' ;;
     *) return 1 ;;
   esac
 }
@@ -231,6 +242,10 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
       printf '%s\n' "$wt/.fm-kimi-turnend"
       printf '%s\n' "$state/$id.kimi-turnend-token"
       ;;
+    agy)
+      printf '%s\n' "$wt/.fm-agy-turnend"
+      printf '%s\n' "$state/$id.agy-turnend-token"
+      ;;
     muse)
       # muse installs no hook: its busy source is its own session event log,
       # bound to the pane by these two firstmate-owned sidecars. A relaunch
@@ -250,15 +265,16 @@ fm_control_harness_wiring_paths() {  # <harness> <worktree> <state-dir> <id>
 }
 
 # The firstmate-owned global turn-end registry entry a harness mints per task.
-# grok and kimi are the two adapters whose turn-end hook is global and gated by
-# a private token file; every other adapter's wiring is fully covered by
-# fm_control_harness_wiring_paths. Prints the registry path or nothing.
+# grok, kimi, and agy are the three adapters whose turn-end hook is global and
+# gated by a private token file; every other adapter's wiring is fully covered
+# by fm_control_harness_wiring_paths. Prints the registry path or nothing.
 fm_control_harness_turnend_token_path() {  # <harness> <state-dir> <id>
   local harness=${1-} state=${2-} id=${3-}
   [ -n "$state" ] && [ -n "$id" ] || return 1
   case "$harness" in
     grok) printf '%s\n' "$state/$id.grok-turnend-token" ;;
     kimi) printf '%s\n' "$state/$id.kimi-turnend-token" ;;
+    agy) printf '%s\n' "$state/$id.agy-turnend-token" ;;
   esac
 }
 
@@ -268,6 +284,7 @@ fm_control_harness_turnend_auth_path() {  # <harness> <token>
   case "$harness" in
     grok) printf '%s\n' "${GROK_HOME:-$HOME/.grok}/hooks/fm-turn-end.d/$token" ;;
     kimi) printf '%s\n' "$HOME/.kimi-code/fm-turn-end.d/$token" ;;
+    agy) printf '%s\n' "$HOME/.gemini/config/fm-turn-end.d/$token" ;;
     *) return 0 ;;
   esac
 }
