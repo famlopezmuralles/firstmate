@@ -51,11 +51,10 @@ detect_own() {
   # agy 1.2.12: a tool process spawned by an agy worker that inherited BOTH
   # CLAUDECODE=1 and CURSOR_AGENT=1 carried all three markers together, because
   # agy clears neither. ANTIGRAVITY_AGENT=1 is agy's own child/tool-process
-  # marker and is unambiguous when present. agy has no bin/fm-spawn.sh launch
-  # template yet (no busy-state wiring or trust-dialog handling exist for it
-  # either), so unlike cursor and gemini below there is no launch-boundary
-  # marker-clearing defense in depth yet; this ordering is the only mitigation
-  # until a spawn template lands.
+  # marker and is unambiguous when present. bin/fm-spawn.sh's agy launch
+  # template now also clears the foreign markers at the launch boundary
+  # (defense in depth, matching cursor and gemini below), but this ordering
+  # remains the only mitigation for an agy session a human started by hand.
   [ "${ANTIGRAVITY_AGENT:-}" = "1" ] && { echo agy; return; }
   # Cursor is checked BEFORE claude, deliberately. cursor-agent does NOT clear
   # an inherited CLAUDECODE, so a cursor worker launched from a claude primary

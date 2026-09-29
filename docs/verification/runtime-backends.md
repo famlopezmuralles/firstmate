@@ -569,6 +569,63 @@ teardown gm2 complete; state/gm2.gemini-settings.json removed
 Gemini as a PRIMARY or SECONDMATE runtime is unverified and is refused by `bin/fm-spawn.sh`: no wake protocol exists under `docs/supervision-protocols/` and no turn-end guard adapter was built or exercised.
 No reasoning-effort axis was found; `gemini --help` on 0.58.0 exposes no effort, reasoning, or thinking flag, so the record-and-omit contract applies.
 
+## Antigravity CLI (agy)
+
+The agy crewmate/scout adapter's dispatch surface (trust, launch, busy state, interrupt, exit) was verified on 2026-09-29 with agy 1.2.13 on Linux, node v22.23.1, tmux 3.6.
+Every check below ran in throwaway scratch worktrees (linked `git worktree`s of the firstmate checkout, never a task worktree), and every agy session was terminated before moving on.
+
+### Trust dialog: reproduction and fix
+
+A fresh linked worktree, never listed in `trustedWorkspaces`, launched interactively:
+
+```sh
+agy -i 'reply HELLO' --dangerously-skip-permissions
+```
+
+renders (tmux `capture-pane`):
+
+```text
+Do you trust the contents of this project?
+Antigravity CLI requires permission to read, edit, and execute files here.
+> Yes, I trust this folder
+  No, exit
+```
+
+Accepting it (Enter) appended the exact worktree path to `$HOME/.gemini/antigravity-cli/settings.json`'s `trustedWorkspaces` array (2-space pretty JSON, trailing newline, mode 600); no other key changed.
+Running `bin/fm-agy-trust.sh <worktree> <project>` before launch, instead of answering by hand, pre-seeds the same array entry and was confirmed to suppress the dialog entirely on the next launch - straight into brief processing, no render at all.
+
+### Busy-state hook: live trace
+
+With the global hook installed (`bin/fm-agy-turnend-hook.sh install`) and a real per-task registry entry seeded, a live multi-step agy run against the real `bin/fm-busy-event.sh` writer produced this exact classification trail (`state/<id>.busy-state`, tail):
+
+```text
+v1 gen=g...  seq=1  state=busy source=fm-spawn event=launch-brief
+v1 gen=g...  seq=7  state=busy source=agy-hook event=pre-invocation
+...
+v1 gen=g...  seq=20 state=busy source=agy-hook event=pre-invocation
+v1 gen=g...  seq=23 state=idle source=agy-hook event=stop
+```
+
+The worker wrote both requested output files with no keystroke sent to the pane, and `state/<id>.turn-ended` was touched at seq=23.
+A manual Escape interrupt was separately confirmed NOT to fire the `Stop` hook (payload file unchanged across an interrupted turn), the same limitation Claude has; no interrupt wiring reads agy's busy state as a result, matching Claude's `fm-interrupt` fallback story.
+
+One anomalous `workspacePaths[0]` was observed once across roughly a dozen captured PreInvocation/Stop payloads (single- and multi-invocation turns, a genuine two-workspace concurrency case, and an abrupt-kill-then-relaunch sequence): it named the captain's `$HOME` instead of the launch cwd.
+It did not reproduce on any deliberate retry, including a repeat of the exact prompt that triggered it, and is suspected to follow an abruptly `tmux kill-session`-terminated prior agy process rather than ordinary concurrent use.
+The registry-guard design (`bin/fm-agy-turnend-hook.sh`) makes this class of anomaly self-correcting rather than a misattribution risk: `$HOME` never holds a `.fm-agy-turnend` pointer, so the mismatched event is a no-op, not a wrong-task write.
+
+### Interrupt and exit
+
+```text
+Escape (mid-turn)  -> "Interrupted · What should Antigravity CLI do instead?", composer empty, idle `? for shortcuts` footer - single press, no clear key needed.
+/quit + Enter       -> process exits; confirmed with a post-command marker touch in the SAME shell invocation, because a naive immediate re-check can race the dying tmux server.
+```
+
+### Not verified
+
+agy as a PRIMARY or SECONDMATE runtime is unverified and is refused by `bin/fm-spawn.sh`: no wake protocol exists under `docs/supervision-protocols/` and no turn-end guard adapter was built or exercised.
+`bin/fm-control.sh`'s own interrupt/exit orchestration (ack-source polling, postcondition proof) was exercised only through the fake-backend portable suite, not driven against the real process the way the trust and busy-hook mechanics above were.
+User-level skill discovery from `~/.agents/skills`, `--input-format stream-json`, `--json-schema`, `--sandbox`, `--mode`, API-key auth mode, and per-model effort variance beyond the installed default were not exercised.
+
 ## Herdr
 
 The compatibility floor is protocol 14.

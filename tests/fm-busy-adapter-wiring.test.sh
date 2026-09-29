@@ -316,6 +316,22 @@ run_gemini_hook() {  # <settings.json> <hook-event>
   sh -c "$cmd"
 }
 
+# agy's hook is GLOBAL (bin/fm-agy-turnend-hook.sh), not per-task like
+# gemini's, so the command it installs takes no per-task literals - it reads a
+# stdin payload naming the workspace and looks up this task's registry entry
+# by that path. Feeding the exact worktree path here is what a real agy
+# PreInvocation/Stop payload's `workspacePaths[0]` would report.
+run_agy_hook() {  # <hooks.json> <hook-event PreInvocation|Stop> <workspace> <fake-HOME>
+  local cmd
+  cmd=$(jq -r ".\"fm-turn-end\"[\"$2\"][0].command" "$1")
+  [ -n "$cmd" ] && [ "$cmd" != null ] || fail "no $2 hook command in $1"
+  # The hook script resolves its private registry from $HOME at RUN time
+  # (unlike gemini's per-task settings file, whose command already carries
+  # every literal it needs), so this must match the $HOME fm-spawn wrote the
+  # registry under - the same isolated spawn_home fm_test_run_spawn used.
+  printf '{"workspacePaths":["%s"]}\n' "$3" | HOME="$4" sh -c "$cmd"
+}
+
 test_gemini_hooks_semantic_lifecycle() {
   local rec id=busy-gm-1 out state settings
   rec=$(make_spawn_case gemini-lifecycle gemini "$id")
@@ -407,6 +423,138 @@ test_gemini_is_refused_as_a_secondmate() {
   pass "gemini is refused as a secondmate because it has no primary supervision protocol"
 }
 
+test_agy_hooks_semantic_lifecycle() {
+  local rec id=busy-agy-1 out state hooks token record trust_store
+  rec=$(make_spawn_case agy-lifecycle agy "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "agy spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  hooks="$HOME_DIR/user-home/.gemini/config/hooks.json"
+  assert_present "$hooks" "agy spawn did not install the global hook"
+  jq -e . "$hooks" >/dev/null || fail "agy global hooks.json is not valid JSON"
+  for ev in PreInvocation Stop; do
+    jq -e ".\"fm-turn-end\"[\"$ev\"]" "$hooks" >/dev/null || fail "agy global hooks lack $ev"
+  done
+  # The pre-registered workspace trust is a SEPARATE control (bin/fm-agy-trust.sh)
+  # from the busy-state hook, but the same spawn must land both.
+  trust_store="$HOME_DIR/user-home/.gemini/antigravity-cli/settings.json"
+  assert_present "$trust_store" "agy spawn did not pre-register workspace trust"
+  jq -e --arg wt "$WT_DIR" '.trustedWorkspaces | index($wt)' "$trust_store" >/dev/null \
+    || fail "agy spawn did not trust the exact worktree path"
+  assert_present "$state/$id.agy-turnend-token" "agy spawn did not write the registry token pointer"
+  assert_present "$WT_DIR/.fm-agy-turnend" "agy spawn did not write the worktree token pointer"
+  token=$(cat "$state/$id.agy-turnend-token")
+  record="$HOME_DIR/user-home/.gemini/config/fm-turn-end.d/$token"
+  assert_present "$record" "agy spawn did not write the private registry entry"
+
+  out=$(classify agy "$id" "$state")
+  [ "$out" = "busy fm-spawn" ] || fail "seed after spawn must be 'busy fm-spawn', got '$out'"
+
+  rm -f "$state/$id.turn-ended"
+  out=$(run_agy_hook "$hooks" PreInvocation "$WT_DIR" "$HOME_DIR/user-home") || fail "PreInvocation hook command failed"
+  [ "$out" = '{}' ] || fail "PreInvocation must print exactly {}, got '$out'"
+  out=$(classify agy "$id" "$state")
+  [ "$out" = "busy agy-hook" ] || fail "PreInvocation must classify 'busy agy-hook', got '$out'"
+
+  out=$(run_agy_hook "$hooks" Stop "$WT_DIR" "$HOME_DIR/user-home") || fail "Stop hook command failed"
+  [ "$out" = '{"decision":"stop"}' ] || fail "Stop must print the stop decision, got '$out'"
+  [ -f "$state/$id.turn-ended" ] || fail "Stop no longer touches the notification marker"
+  out=$(classify agy "$id" "$state")
+  [ "$out" = "idle agy-hook" ] || fail "Stop must classify 'idle agy-hook', got '$out'"
+
+  # A workspace this registry never issued a token for (or the anomalous
+  # $HOME-reporting case observed live - see bin/fm-agy-turnend-hook.sh's
+  # header) must stay a harmless no-op, never touch this task's state.
+  out=$(run_agy_hook "$hooks" PreInvocation "$HOME_DIR/user-home" "$HOME_DIR/user-home") \
+    || fail "an unmatched workspace must still exit 0"
+  [ "$out" = '{}' ] || fail "an unmatched workspace must print the safe default, got '$out'"
+  out=$(classify agy "$id" "$state")
+  [ "$out" = "idle agy-hook" ] || fail "an unmatched workspace must not change this task's state, got '$out'"
+  pass "agy hooks open on PreInvocation and close on Stop, guarded by the per-task registry"
+}
+
+test_agy_hooks_stale_incarnation_harmless() {
+  local rec id=busy-agy-2 out state hooks
+  rec=$(make_spawn_case agy-stale agy "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "agy spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  hooks="$HOME_DIR/user-home/.gemini/config/hooks.json"
+  "$ROOT/bin/fm-busy-event.sh" arm "$state" "$id" >/dev/null
+  out=$(run_agy_hook "$hooks" PreInvocation "$WT_DIR" "$HOME_DIR/user-home") \
+    || fail "a stale-gen hook must still exit 0 so agy's lifecycle is never broken"
+  [ "$out" = '{}' ] || fail "a stale-gen hook must still print the safe default, got '$out'"
+  out=$(classify agy "$id" "$state")
+  [ "$out" = "busy fm-spawn" ] || fail "a stale-gen hook event must not change state, got '$out'"
+  pass "agy hook events from a superseded incarnation are rejected without breaking the hook"
+}
+
+test_raw_agy_launch_has_no_semantic_wiring() {
+  local rec id=busy-agy-raw out state
+  rec=$(make_spawn_case agy-raw agy "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" 'agy --debug')
+  expect_code 0 $? "raw agy spawn should succeed: $out"
+  state="$HOME_DIR/state"
+  assert_absent "$state/$id.busy-gen" "raw agy launch must not arm a busy generation"
+  assert_absent "$state/$id.agy-turnend-token" "raw agy launch must not write a registry token"
+  assert_absent "$WT_DIR/.fm-agy-turnend" "raw agy launch must not write a worktree pointer"
+  out=$(classify agy "$id" "$state")
+  [ "$out" = "unknown missing" ] || fail "raw agy launch must classify unknown, got '$out'"
+  pass "raw agy launch remains unwired and classifies unknown"
+}
+
+run_teardown() {  # <home> <wt> <fakebin> <id>
+  local home=$1 wt=$2 fakebin=$3 id=$4
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" HOME="$home/user-home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="${TMUX:-fake,1,0}" \
+    PATH="$fakebin:$PATH" \
+    "$ROOT/bin/fm-teardown.sh" "$id" --force 2>&1
+}
+
+test_agy_teardown_removes_pointer_and_registry_token() {
+  local rec id=busy-agy-4 out state hooks token record
+  rec=$(make_spawn_case agy-teardown agy "$id")
+  read_case_record "$rec"
+  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR")
+  expect_code 0 $? "agy spawn should succeed before teardown: $out"
+  state="$HOME_DIR/state"
+  hooks="$HOME_DIR/user-home/.gemini/config/hooks.json"
+  token=$(cat "$state/$id.agy-turnend-token")
+  record="$HOME_DIR/user-home/.gemini/config/fm-turn-end.d/$token"
+  assert_present "$WT_DIR/.fm-agy-turnend" "agy spawn did not write the worktree pointer before teardown"
+  assert_present "$record" "agy spawn did not write the registry entry before teardown"
+
+  out=$(run_teardown "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  expect_code 0 $? "agy teardown should succeed: $out"
+  assert_absent "$WT_DIR/.fm-agy-turnend" "agy worktree pointer survived teardown"
+  assert_absent "$record" "agy registry token survived teardown"
+  assert_absent "$state/$id.agy-turnend-token" "agy token state survived teardown"
+  # The global hook installation itself is machine state, not per-task state,
+  # and must survive so the NEXT agy spawn does not need to reinstall it.
+  assert_present "$hooks" "teardown must not remove the machine-global agy hook installation"
+  pass "fm-teardown: agy task pointer and registry token are removed, the global hook installation survives"
+}
+
+test_agy_is_refused_as_a_secondmate() {
+  local rec id=busy-agy-3 out
+  rec=$(make_spawn_case agy-secondmate agy "$id")
+  read_case_record "$rec"
+  # A secondmate spawn carries no delivery contract, so this one deliberately
+  # bypasses run_spawn's ship-only --mode/--yolo arguments.
+  out=$(GROK_HOME="$HOME_DIR/grok-home" \
+    fm_test_run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" --secondmate "$id" agy) && {
+    fail "an agy secondmate must be refused, it has no primary supervision protocol: $out"
+  }
+  assert_contains "$out" 'crewmate/scout adapter only' \
+    "refusing an agy secondmate must name the crewmate/scout boundary: $out"
+  pass "agy is refused as a secondmate because it has no primary supervision protocol"
+}
+
 test_kimi_and_grok_install_no_unverified_wiring() {
   local state out
   state="$TMP_ROOT/gates/state"
@@ -433,6 +581,11 @@ test_gemini_hooks_semantic_lifecycle
 test_gemini_hooks_stale_incarnation_harmless
 test_raw_gemini_launch_has_no_semantic_wiring
 test_gemini_is_refused_as_a_secondmate
+test_agy_hooks_semantic_lifecycle
+test_agy_hooks_stale_incarnation_harmless
+test_raw_agy_launch_has_no_semantic_wiring
+test_agy_teardown_removes_pointer_and_registry_token
+test_agy_is_refused_as_a_secondmate
 test_codex_unverified_until_a_semantic_source_exists
 
 echo "all fm-busy-adapter-wiring tests passed"
