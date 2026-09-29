@@ -1,0 +1,27 @@
+Scenario: Pi primary watcher arms after a later session-lock handoff (fix commit 199aa99)
+
+Test: extracted test_pi_session_start_waits_for_lock_handoff from
+tests/fm-pi-watch-extension.test.sh, run standalone against the real
+.pi/extensions/fm-primary-pi-watch.ts module via `node --input-type=module`.
+
+Drives:
+  1. session_start fires while the Pi session lock is NOT yet owned by this
+     process -> watcher must stay disarmed (asserted no arm-log line appears).
+  2. Lock file is then written for this pid (the deferred handoff) -> watcher
+     must arm within the poll window (arm-log line appears).
+  3. session_shutdown fires -> no successor watcher re-arms afterward
+     (arm-log stays a single "arm\n" line).
+
+=== Against target commit 199aa99 (fix) ===
+$ bash /tmp/scenario-pi-lock-handoff.sh
+ok - Pi session start arms after the session lock handoff
+
+=== Against base commit 9a86492 (pre-fix) — regression proof ===
+Same test, extension swapped for `git show 9a86492:.pi/extensions/fm-primary-pi-watch.ts`:
+not ok - Pi session start must arm after its later session-lock handoff: expected exit 0, got 1
+
+Conclusion: before the fix, a Pi session whose lock ownership handoff lands
+after session_start never arms a watcher at all (matches the reported
+sick-worker symptom: relaunched mate's bin/fm-watch.sh child disappears).
+After the fix, armAfterLockHandoff() polls every 500ms until ownership lands,
+then arms — and does not re-arm after the owner is retired.

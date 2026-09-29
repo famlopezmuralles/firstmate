@@ -1,0 +1,19 @@
+Scenario: bin/fm-secondmate-restart.sh default FM_SECONDMATE_PERSIST_WAIT is
+90s, not 900s (fix commit 199aa99), against a deaf secondmate (never answers
+the persist doorbell).
+
+Driven live with the real bin/fm-secondmate-restart.sh, the real
+fm-pending-reply-lib.sh gate, and the fm-secondmate-restart.test.sh session
+stub, WITHOUT overriding FM_SECONDMATE_PERSIST_WAIT (so the script's own
+default applies) against one never-answering local mate.
+
+$ bash /tmp/scenario-restart-default-timeout.sh
+RESULT rc=3 elapsed=92s
+nudged: sm1: it did not confirm within 90s that its open work is written down, so its conversation was not spent
+summary: 0 of 1 restarted, 1 nudged, 0 unreached
+PASS: default persist wait honored ~90s (was 900s before fix)
+
+Conclusion: a deaf secondmate now falls back to the honest nudge path after
+~90s wall-clock, matching the new default in bin/fm-secondmate-restart.sh
+(PERSIST_WAIT=${FM_SECONDMATE_PERSIST_WAIT:-90}). Before the fix the default
+was 900s, matching the captain's reported 600s/900s EXIT=124 hangs on `mmp`.
