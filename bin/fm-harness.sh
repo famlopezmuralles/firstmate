@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Detect the agent harness this process tree runs on.
-# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|unknown
+# Usage: fm-harness.sh                  print own harness: claude|codex|opencode|pi|pi-signed|grok|kimi|cursor|gemini|muse|rovo|omp|agy|unknown
 #        fm-harness.sh crew             print the effective CREWMATE harness
 #                                        (config/crew-harness; "default" resolves to own)
 #        fm-harness.sh secondmate       print the harness the PRIMARY uses to launch
@@ -46,6 +46,17 @@ detect_own() {
   # multiplexer's stored environment can silently misidentify one of them before
   # ancestry is consulted. This is a precedence hazard, not evidence that
   # CLAUDECODE inheritance into a kimi child was observed; it was not observed.
+  # agy (Antigravity CLI) is checked BEFORE cursor and claude, deliberately: it
+  # is the most inheritance-prone case of all, not just one. Verified live on
+  # agy 1.2.12: a tool process spawned by an agy worker that inherited BOTH
+  # CLAUDECODE=1 and CURSOR_AGENT=1 carried all three markers together, because
+  # agy clears neither. ANTIGRAVITY_AGENT=1 is agy's own child/tool-process
+  # marker and is unambiguous when present. agy has no bin/fm-spawn.sh launch
+  # template yet (no busy-state wiring or trust-dialog handling exist for it
+  # either), so unlike cursor and gemini below there is no launch-boundary
+  # marker-clearing defense in depth yet; this ordering is the only mitigation
+  # until a spawn template lands.
+  [ "${ANTIGRAVITY_AGENT:-}" = "1" ] && { echo agy; return; }
   # Cursor is checked BEFORE claude, deliberately. cursor-agent does NOT clear
   # an inherited CLAUDECODE, so a cursor worker launched from a claude primary
   # carries BOTH markers and whichever is tested first wins. Cursor's own
@@ -167,6 +178,12 @@ detect_own() {
       # named `claude` with its own node child, and that fallback's *claude*
       # args glob would otherwise claim it if that subtree were ever walked.
       omp) echo omp; return ;;
+      # agy (Antigravity CLI) is a native ELF binary, not a node bundle: `ps -o
+      # comm=` reports the bare name `agy` for a live process (verified, agy
+      # 1.2.12), so no MainThread-style interpreter hack is needed here the way
+      # gemini needs one. Anchored, never *agy*, for the same collision reason
+      # as muse and omp above.
+      agy) echo agy; return ;;
       node*|python*)
         # Bare interpreter: match the harness name in its script path.
         args=$(ps -o args= -p "$pid" 2>/dev/null)
