@@ -89,6 +89,7 @@ type SessionGeneration = {
   replacement: boolean;
   child: ChildProcess | null;
   retryTimer: ReturnType<typeof setTimeout> | null;
+  lockWaitTimer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   retryFailures: number;
   restoring: boolean;
@@ -415,6 +416,7 @@ function createGeneration(): SessionGeneration {
     replacement: false,
     child: null,
     retryTimer: null,
+    lockWaitTimer: null,
     cleanupTimer: null,
     retryFailures: 0,
     restoring: false,
@@ -437,8 +439,10 @@ function generationIsLive(generation: SessionGeneration): boolean {
 function stopGeneration(generation: SessionGeneration): ChildProcess | null {
   generation.stopping = true;
   if (generation.retryTimer) clearTimeout(generation.retryTimer);
+  if (generation.lockWaitTimer) clearTimeout(generation.lockWaitTimer);
   if (generation.cleanupTimer) clearTimeout(generation.cleanupTimer);
   generation.retryTimer = null;
+  generation.lockWaitTimer = null;
   generation.cleanupTimer = null;
   const child = generation.child;
   if (child) child.kill("SIGTERM");
@@ -1090,6 +1094,23 @@ export default function (pi: ExtensionAPI) {
     return result;
   }
 
+  function armAfterLockHandoff(owner: SessionGeneration): void {
+    if (!generationIsLive(owner)) return;
+    if (lockOwnership() === "owned") {
+      if (owner.lockWaitTimer) clearTimeout(owner.lockWaitTimer);
+      owner.lockWaitTimer = null;
+      activateOwnedWatch(owner);
+      return;
+    }
+    if (owner.lockWaitTimer) return;
+    const timer = setTimeout(() => {
+      if (owner.lockWaitTimer === timer) owner.lockWaitTimer = null;
+      armAfterLockHandoff(owner);
+    }, 500);
+    timer.unref();
+    owner.lockWaitTimer = timer;
+  }
+
   pi.on?.("before_agent_start", (event) => {
     consumeWake(generation, event.prompt);
   });
@@ -1102,8 +1123,7 @@ export default function (pi: ExtensionAPI) {
     if (generation.stopping) generation = createGeneration();
     activateGeneration(generation);
     markLoaded();
-    if (lockOwnership() !== "owned") return;
-    activateOwnedWatch(generation);
+    armAfterLockHandoff(generation);
   });
   pi.on?.("session_shutdown", async (event) => {
     const replacement = event.reason === "reload" || event.reason === "new" || event.reason === "resume" || event.reason === "fork";

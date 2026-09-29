@@ -1891,6 +1891,56 @@ EOF
   pass "Pi watcher arm distinguishes all session lock ownership states"
 }
 
+test_pi_session_start_waits_for_lock_handoff() {
+  local repo home plugin log out status
+  repo="$TMP_ROOT/pi-lock-handoff-root"
+  home="$TMP_ROOT/pi-lock-handoff-home"
+  log="$TMP_ROOT/pi-lock-handoff.log"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  install_pi_watch_extension_fixture "$repo"
+  plugin="$repo/.pi/extensions/fm-primary-pi-watch.ts"
+  cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'arm\n' >> "${FM_ARM_LOG:?}"
+printf 'watcher: started pid=%s (beacon fresh)\n' "$$"
+trap 'exit 0' TERM
+while :; do sleep 0.1; done
+SH
+  chmod +x "$repo/bin/fm-watch-arm.sh"
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" node --input-type=module 2>&1 <<'EOF'
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const handlers = new Map();
+const pi = {
+  on(name, handler) { handlers.set(name, handler); },
+  registerCommand() {},
+  registerTool() {},
+  sendUserMessage: async () => {},
+};
+const mod = await import(pathToFileURL(process.env.PLUGIN).href);
+mod.default(pi);
+await handlers.get("session_start")();
+await new Promise((resolve) => setTimeout(resolve, 100));
+if (existsSync(process.env.FM_ARM_LOG)) throw new Error("watcher armed before this Pi session owned the lock");
+writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
+for (let i = 0; i < 40 && !existsSync(process.env.FM_ARM_LOG); i += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+if (!existsSync(process.env.FM_ARM_LOG)) throw new Error("watcher stayed disarmed after the session lock handoff");
+await handlers.get("session_shutdown")({ reason: "quit" });
+await new Promise((resolve) => setTimeout(resolve, 700));
+if (readFileSync(process.env.FM_ARM_LOG, "utf8") !== "arm\n") {
+  throw new Error("terminal shutdown started another watcher after retiring the owner");
+}
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "Pi session start must arm after its later session-lock handoff"
+  [ -z "$out" ] || fail "Pi session lock handoff test printed output: $out"
+  pass "Pi session start arms after the session lock handoff"
+}
+
 test_pi_session_transition_generation_owner() {
   local repo home plugin child_pid_file child_marker_file marker_root arm_log out status
   repo="$TMP_ROOT/pi-session-transition-root"
@@ -3997,6 +4047,7 @@ test_pi_empty_close_retries_instead_of_disappearing
 test_pi_established_empty_close_honors_retry_limit
 test_pi_actionable_close_rechecks_session_lock
 test_pi_arm_distinguishes_session_lock_ownership
+test_pi_session_start_waits_for_lock_handoff
 test_pi_session_transition_generation_owner
 test_pi_session_replacement_carries_inflight_actionable_close
 test_pi_streaming_followup_is_replayed_after_replacement

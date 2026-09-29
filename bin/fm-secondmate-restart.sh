@@ -57,7 +57,7 @@
 # capability on its own argv rather than trusting a caller's list.
 #
 # Environment knobs:
-#   FM_SECONDMATE_PERSIST_WAIT  seconds to wait for one mate's persist answer (900)
+#   FM_SECONDMATE_PERSIST_WAIT  seconds to wait for one mate's persist answer (90)
 #   FM_SECONDMATE_PERSIST_POLL  seconds between checks of that answer (5)
 #
 # Exit status: 0 every named mate restarted; 3 at least one was nudged or left
@@ -92,7 +92,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-pending-reply-lib.sh
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 
-PERSIST_WAIT=${FM_SECONDMATE_PERSIST_WAIT:-900}
+PERSIST_WAIT=${FM_SECONDMATE_PERSIST_WAIT:-90}
 PERSIST_POLL=${FM_SECONDMATE_PERSIST_POLL:-5}
 case "$PERSIST_WAIT" in ''|*[!0-9]*) echo "error: FM_SECONDMATE_PERSIST_WAIT must be a non-negative integer: $PERSIST_WAIT" >&2; exit 2 ;; esac
 case "$PERSIST_POLL" in ''|*[!0-9]*|0) echo "error: FM_SECONDMATE_PERSIST_POLL must be a positive integer: $PERSIST_POLL" >&2; exit 2 ;; esac
