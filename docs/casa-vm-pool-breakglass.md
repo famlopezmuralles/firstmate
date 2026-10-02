@@ -6,7 +6,7 @@ No step here runs automatically, and adding the label described below happens on
 ## Background
 
 `linux25` runs `pool.sh`, a single-VM ephemeral GitHub Actions runner pool labeled `casa-vm` for 7 repositories, capped at one concurrent VM.
-A registration-timeout watchdog and a 3-strike halt (`docs/casa-vm-observability` investigation; see the task's backlog item `casa-vm-observability` for the full design) stop the pool after 3 consecutive VM boots fail to register in a row, rather than retrying forever.
+A registration-timeout watchdog and a 3-strike halt (see the main-home investigation report `data/casa-vm-observability/report.md` for the full design) stop the pool after 3 consecutive VM boots fail to register in a row, rather than retrying forever.
 A halted pool blocks PR-triggered CI for those repositories, because `ci.yml` routes `pull_request` events to the `casa-vm` label and everything else to the always-on `casa` runner.
 `casa` is already online for all 7 repositories under the label `casa`, so the fastest recovery is making `casa` also accept `casa-vm`-labeled jobs while the pool is down.
 
