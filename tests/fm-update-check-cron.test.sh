@@ -232,6 +232,70 @@ JSON
   pass "a git-backed watched-tools.json entry is checked and relabeled with its configured name"
 }
 
+test_git_backed_watched_tool_honors_remote_override() {
+  local home tool_repo work remote_path
+  home=$(new_primary_home)
+
+  tool_repo="$home/watched-tool-remote"
+  work="$home/work-watched-tool-remote"
+  remote_path="$home/remotes/watched-tool-remote.git"
+  mkdir -p "$home/remotes"
+  git init -q "$work"
+  git -C "$work" symbolic-ref HEAD refs/heads/main
+  commit_file "$work" file.txt v0 C0
+  git clone --quiet --bare "$work" "$remote_path"
+  git -C "$work" remote add origin "file://$(cd "$remote_path" && pwd)"
+  git -C "$work" push -q -u origin main
+  git clone --quiet "file://$(cd "$remote_path" && pwd)" "$tool_repo"
+  git -C "$tool_repo" remote rename origin upstream
+  commit_file "$work" file.txt v1 C1
+  git -C "$work" push -q origin main
+
+  cat > "$home/config/watched-tools.json" <<JSON
+{"tools":[{"name":"custom-tool","git":{"repo":"$tool_repo","remote":"upstream"}}]}
+JSON
+
+  run_check "$home" >/dev/null
+
+  [ "$(note_count "$home")" -eq 1 ] || fail "a behind watched tool configured with a non-origin remote must still raise exactly one inbox alert"
+  assert_contains "$(note_bodies "$home")" "custom-tool: 1 commits behind upstream/main" \
+    "alert compares against the configured remote override, not a hardcoded origin"
+  pass "a watched-tools.json git.remote override is honored instead of being silently skipped"
+}
+
+test_git_backed_watched_tool_honors_branch_override() {
+  local home tool_repo work remote_path
+  home=$(new_primary_home)
+
+  tool_repo="$home/watched-tool-branch"
+  work="$home/work-watched-tool-branch"
+  remote_path="$home/remotes/watched-tool-branch.git"
+  mkdir -p "$home/remotes"
+  git init -q "$work"
+  git -C "$work" symbolic-ref HEAD refs/heads/main
+  commit_file "$work" file.txt v0 C0
+  git clone --quiet --bare "$work" "$remote_path"
+  git -C "$work" remote add origin "file://$(cd "$remote_path" && pwd)"
+  git -C "$work" push -q -u origin main
+  git -C "$work" checkout -qb release
+  commit_file "$work" file.txt r0 R0
+  git -C "$work" push -q -u origin release
+  git clone --quiet --branch release "file://$(cd "$remote_path" && pwd)" "$tool_repo"
+  commit_file "$work" file.txt r1 R1
+  git -C "$work" push -q origin release
+
+  cat > "$home/config/watched-tools.json" <<JSON
+{"tools":[{"name":"release-tool","git":{"repo":"$tool_repo","branch":"release"}}]}
+JSON
+
+  run_check "$home" >/dev/null
+
+  [ "$(note_count "$home")" -eq 1 ] || fail "a behind watched tool configured with a branch override must still raise exactly one inbox alert"
+  assert_contains "$(note_bodies "$home")" "release-tool: 1 commits behind origin/release" \
+    "alert compares against the configured branch override, not the auto-detected default branch"
+  pass "a watched-tools.json git.branch override is honored instead of comparing against the wrong branch"
+}
+
 test_cron_refuses_in_secondmate_home() {
   local home out rc
   home=$(new_secondmate_home)
@@ -292,6 +356,8 @@ test_dirty_copy_alerts_as_stuck
 test_local_only_and_no_origin_stay_silent
 test_multiple_behind_clones_consolidate_into_one_note
 test_git_backed_watched_tool_is_checked_and_relabeled
+test_git_backed_watched_tool_honors_remote_override
+test_git_backed_watched_tool_honors_branch_override
 test_cron_refuses_in_secondmate_home
 test_install_status_uninstall_idempotent
 test_install_refuses_in_secondmate_home

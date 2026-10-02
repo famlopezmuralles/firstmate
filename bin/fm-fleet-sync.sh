@@ -39,6 +39,15 @@
 # and never fast-forwards: a clone that is clean and behind is reported as
 # "<label>: N commits behind <base>" instead of being synced. Every other
 # outcome (already current, STUCK, or a benign skip) is unchanged.
+#
+# The single-project form optionally takes a remote name and a branch name
+# after the project argument - "fm-fleet-sync.sh --check-only <path> [<remote>
+# [<branch>]]" - so a caller comparing a config/watched-tools.json git entry
+# (docs/configuration.md's "remote"/"branch" override fields) can honor a
+# non-"origin" remote or a non-default branch instead of this script silently
+# assuming "origin" and auto-detecting the default. The whole-fleet form never
+# takes these; every projects/ clone is still compared against its own
+# "origin" and its own auto-detected default branch.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,7 +79,7 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
 fi
 
 usage() {
-  echo "usage: fm-fleet-sync.sh [--check-only] [<project-dir-or-name>]" >&2
+  echo "usage: fm-fleet-sync.sh [--check-only] [<project-dir-or-name> [<remote> [<branch>]]]" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -83,7 +92,9 @@ if [ "${1:-}" = "--check-only" ]; then
   CHECK_ONLY=1
   shift
 fi
-[ $# -le 1 ] || { usage; exit 1; }
+[ $# -le 3 ] || { usage; exit 1; }
+REMOTE_OVERRIDE="${2:-}"
+BRANCH_OVERRIDE="${3:-}"
 
 project_label() {
   case "$PROJ" in
@@ -130,9 +141,13 @@ resolve_project_arg() {
 
 default_branch() {
   local ref branch
-  ref=$(git -C "$PROJ" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -n "$BRANCH_OVERRIDE" ]; then
+    echo "$BRANCH_OVERRIDE"
+    return 0
+  fi
+  ref=$(git -C "$PROJ" symbolic-ref --quiet --short "refs/remotes/$REMOTE/HEAD" 2>/dev/null || true)
   if [ -n "$ref" ]; then
-    echo "${ref#origin/}"
+    echo "${ref#"$REMOTE"/}"
     return 0
   fi
   for branch in main master; do
@@ -182,7 +197,7 @@ packed_refs_lock_path() {
 # a session-start refresh (which discards fleet-sync stderr) still surfaces it.
 fetch_with_packed_refs_lock_guard() {
   local rc attempt=0 lock lock_desc
-  FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+  FETCH_OUTPUT=$(git -C "$PROJ" fetch "$REMOTE" --prune --quiet 2>&1); rc=$?
   [ "$rc" -eq 0 ] && return 0
   is_packed_refs_lock_error "$FETCH_OUTPUT" || return "$rc"
 
@@ -192,7 +207,7 @@ fetch_with_packed_refs_lock_guard() {
     attempt=$(( attempt + 1 ))
     echo "$label: fetch blocked by packed-refs lock ($lock_desc); waiting ${FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${FLEET_SYNC_PACKED_REFS_LOCK_RETRIES}) (owning process may be exiting)" >&2
     sleep "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS"
-    FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+    FETCH_OUTPUT=$(git -C "$PROJ" fetch "$REMOTE" --prune --quiet 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
       echo "$label: fetch succeeded on retry; packed-refs lock cleared on its own" >&2
       # One stdout summary so a session-start refresh (which discards fleet-sync
@@ -216,7 +231,7 @@ fetch_with_packed_refs_lock_guard() {
         return "$rc"
       fi
       echo "$label: removed provably-stale packed-refs lock $lock (age >= ${FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS}s, no live holder) and retrying fetch" >&2
-      FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+      FETCH_OUTPUT=$(git -C "$PROJ" fetch "$REMOTE" --prune --quiet 2>&1); rc=$?
       if [ "$rc" -eq 0 ]; then
         echo "$label: fetch succeeded after stale packed-refs lock cleanup" >&2
         echo "$label: recovered: removed a stale packed-refs lock (no live holder)"
@@ -343,8 +358,8 @@ sync_project() {
     echo "$label: skipped: local-only project"
     return 0
   fi
-  if ! git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
-    echo "$label: skipped: no origin remote"
+  if ! git -C "$PROJ" remote get-url "$REMOTE" >/dev/null 2>&1; then
+    echo "$label: skipped: no $REMOTE remote"
     return 0
   fi
 
@@ -363,7 +378,7 @@ sync_project() {
     echo "$label: skipped: cannot determine default branch"
     return 0
   }
-  BASE="origin/$DEFAULT"
+  BASE="$REMOTE/$DEFAULT"
   if ! git -C "$PROJ" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
     echo "$label: skipped: $BASE does not exist"
     return 0
@@ -459,11 +474,14 @@ sync_project() {
   return 0
 }
 
-if [ $# -eq 1 ]; then
+if [ $# -ge 1 ]; then
+  REMOTE="${REMOTE_OVERRIDE:-origin}"
   sync_project "$(resolve_project_arg "$1")"
   exit 0
 fi
 
+REMOTE=origin
+BRANCH_OVERRIDE=""
 [ -d "$PROJECTS" ] || exit 0
 for proj in "$PROJECTS"/*; do
   [ -e "$proj" ] || continue

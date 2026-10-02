@@ -85,17 +85,20 @@ mark_seen() {
   SEEN_PATHS="${SEEN_PATHS}${SEEN_PATHS:+ }$1"
 }
 
-# collect_named <display-name> <repo-path>: run --check-only against one
-# explicit repo and relabel its output lines with <display-name> rather than
-# the raw path fm-fleet-sync.sh's single-project form would otherwise print.
+# collect_named <display-name> <repo-path> <remote> <branch>: run --check-only
+# against one explicit repo, honoring its configured remote/branch override
+# (docs/configuration.md's watched-tools.json schema: remote defaults to
+# "origin", branch defaults to that remote's own default branch), and relabel
+# its output lines with <display-name> rather than the raw path
+# fm-fleet-sync.sh's single-project form would otherwise print.
 collect_named() {
-  local name=$1 path=$2 abs out line display
+  local name=$1 path=$2 remote=$3 branch=$4 abs out line display
   [ -d "$path" ] || return 0
   abs=$(cd "$path" 2>/dev/null && pwd -P) || return 0
   already_seen "$abs" && return 0
   mark_seen "$abs"
 
-  out=$("$FLEET_SYNC" --check-only "$path" 2>/dev/null)
+  out=$("$FLEET_SYNC" --check-only "$path" "$remote" "$branch" 2>/dev/null)
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     case "$line" in
@@ -138,10 +141,11 @@ EOF
 # comparison and is left to its own existing update check
 # (bin/fm-tool-update-check.sh).
 if [ -f "$WATCHED_TOOLS" ] && command -v jq >/dev/null 2>&1; then
-  while IFS=$'\t' read -r name repo; do
+  while IFS=$'\t' read -r name repo remote branch; do
     [ -n "$name" ] && [ -n "$repo" ] || continue
-    collect_named "$name" "$repo"
-  done < <(jq -r '.tools[]? | select(.git.repo != null) | "\(.name)\t\(.git.repo)"' \
+    collect_named "$name" "$repo" "$remote" "$branch"
+  done < <(jq -r '.tools[]? | select(.git.repo != null) |
+    "\(.name)\t\(.git.repo)\t\(.git.remote // "origin")\t\(.git.branch // "")"' \
     "$WATCHED_TOOLS" 2>/dev/null)
 fi
 
