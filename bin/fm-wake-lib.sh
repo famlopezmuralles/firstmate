@@ -1211,20 +1211,70 @@ fm_treehouse_project_lock_path() {  # <project-dir>
 }
 
 # A Treehouse slot has the managed pool's fixed <pool>/<slot>/<repo> layout.
-# Require both its pool state and the same Git common directory as the recorded
-# project; an ordinary linked worktree is not evidence that Treehouse owns it.
-fm_treehouse_pool_slot() {  # <project-dir> <worktree>
+# Classify an acquired worktree's identity against the project this spawn is
+# for, distinguishing "not Treehouse's business" from "Treehouse's business,
+# but belongs to a different clone" - the two return-1 cases a plain boolean
+# would otherwise conflate. Sets FM_TREEHOUSE_SLOT_IDENTITY to one of:
+#   matches   - the worktree's own Git common dir equals the project's; safe
+#   foreign   - the worktree sits in a Treehouse-managed pool (a sibling
+#               treehouse-state.json exists) but its common dir belongs to a
+#               DIFFERENT repository clone - never safe to launch into,
+#               whichever home that other clone belongs to. A shared pool
+#               (Treehouse keys a pool by repository origin, not by which
+#               home's clone asked for it) can hand back a slot a different
+#               clone created via `git worktree add`; a linked worktree never
+#               retargets to a new repo on its own, so the mismatch persists
+#               across an ordinary return/get cycle until someone fixes that
+#               specific slot.
+#   unmanaged - no sibling pool state at all (another backend, or Treehouse
+#               not wired to this worktree); identity cannot be judged, so
+#               callers must not refuse on it
+# FM_TREEHOUSE_SLOT_IDENTITY_COMMON carries the worktree's own resolved common
+# dir as evidence when the identity is "foreign".
+# FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON carries the spawning project's own
+# resolved common dir, so a "foreign" verdict can be reported against the
+# project's actual Git identity rather than its working directory.
+# Returns 1 only on an input or resolution failure (not a real verdict); every
+# verdict otherwise returns 0 with FM_TREEHOUSE_SLOT_IDENTITY set.
+FM_TREEHOUSE_SLOT_IDENTITY=
+FM_TREEHOUSE_SLOT_IDENTITY_COMMON=
+FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON=
+fm_treehouse_slot_identity() {  # <project-dir> <worktree>
   local project=$1 worktree=$2 slot pool state project_common slot_common
+  FM_TREEHOUSE_SLOT_IDENTITY=
+  FM_TREEHOUSE_SLOT_IDENTITY_COMMON=
+  FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON=
   [ -d "$project" ] && [ -d "$worktree" ] || return 1
   slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
   pool=$(dirname "$(dirname "$slot")")
   state="$pool/treehouse-state.json"
-  [ -f "$state" ] && [ ! -L "$state" ] || return 1
+  if [ ! -f "$state" ] || [ -L "$state" ]; then
+    FM_TREEHOUSE_SLOT_IDENTITY=unmanaged
+    return 0
+  fi
   project_common=$(git -C "$project" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   slot_common=$(git -C "$slot" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   project_common=$(CDPATH='' cd -- "$project_common" 2>/dev/null && pwd -P) || return 1
   slot_common=$(CDPATH='' cd -- "$slot_common" 2>/dev/null && pwd -P) || return 1
-  [ "$project_common" = "$slot_common" ]
+  # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+  FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON=$project_common
+  if [ "$project_common" = "$slot_common" ]; then
+    FM_TREEHOUSE_SLOT_IDENTITY=matches
+  else
+    FM_TREEHOUSE_SLOT_IDENTITY=foreign
+    # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+    FM_TREEHOUSE_SLOT_IDENTITY_COMMON=$slot_common
+  fi
+  return 0
+}
+
+# Require both its pool state and the same Git common directory as the
+# recorded project; an ordinary linked worktree is not evidence that Treehouse
+# owns it. Thin boolean wrapper over fm_treehouse_slot_identity, kept for the
+# slot-owner claim callers that only ever needed a yes/no.
+fm_treehouse_pool_slot() {  # <project-dir> <worktree>
+  fm_treehouse_slot_identity "$1" "$2" || return 1
+  [ "$FM_TREEHOUSE_SLOT_IDENTITY" = matches ]
 }
 
 # Slot-owner claim: which task a Treehouse pool slot currently belongs to.

@@ -743,8 +743,57 @@ test_pool_slot_claim_follows_the_spawn_outcome() {
   pass "a Treehouse slot claim names the launched task, refuses when unclaimable, and is dropped by a locked abort"
 }
 
+# A Treehouse pool is shared by repository origin, not by which home's clone
+# asked for a slot. Simulate the cross-home collision directly: a pool-managed
+# slot (<pool>/<slot>/<repo> beside a treehouse-state.json, same shape
+# lay_out_as_pool_slot builds) whose worktree was created via `git worktree
+# add` from a DIFFERENT project than the one this spawn is for. fm-spawn must
+# refuse before any fetch/reset/claim, name the mismatch, and leave the slot
+# exactly as it found it - never return, reset, or destroy it, since it may be
+# another home's live work.
+test_foreign_identity_slot_refuses_without_repair() {
+  local id rec foreign_project foreign_worktree slot_root before out status
+
+  rec=$(make_case foreign-identity-donor "pool-foreign-donor-r1")
+  read_case_record "$rec"
+  foreign_project=$PROJECT_DIR
+  foreign_worktree=$POOL_DIR
+
+  id='pool-foreign-identity-r1'
+  rec=$(make_case foreign-identity-spawn "$id")
+  read_case_record "$rec"
+
+  slot_root="$CASE_DIR/slots"
+  mkdir -p "$slot_root/9"
+  git -C "$foreign_project" worktree move "$foreign_worktree" "$slot_root/9/fillroute"
+  printf '{"worktrees":[{"name":"9","path":"%s"}]}\n' "$slot_root/9/fillroute" \
+    > "$slot_root/treehouse-state.json"
+  POOL_DIR="$slot_root/9/fillroute"
+
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  [ "$status" -ne 0 ] || fail "spawn launched into a slot linked to a different repository clone"$'\n'"$out"
+  assert_contains "$out" "belongs to a different repository clone" \
+    "spawn did not name the foreign-identity mismatch as its refusal reason"
+  assert_contains "$out" "$POOL_DIR" "refusal did not name the foreign slot's own path"
+  [ ! -e "$HOME_DIR/state/$id.meta" ] \
+    || fail "spawn published a task record for a foreign-identity slot"
+  [ ! -e "$slot_root/9/.fm-slot-owner" ] \
+    || fail "spawn claimed a Treehouse slot that belongs to a different repository clone"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+    || fail "spawn moved the foreign slot's HEAD while refusing to launch into it"
+  [ ! -e "$POOL_DIR/.git/FETCH_HEAD" ] \
+    || fail "spawn fetched inside a foreign-identity slot before refusing it"
+  if [ "${FM_TEST_EVIDENCE:-0}" = 1 ]; then
+    printf '# foreign-identity slot refusal\n%s\nexit=%s\n' "$out" "$status"
+  fi
+  pass "a Treehouse pool slot linked to a different repository clone refuses before launch, left untouched"
+}
+
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
+test_foreign_identity_slot_refuses_without_repair
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_non_main_default_branch_refreshes_before_branching

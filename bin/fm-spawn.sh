@@ -3225,6 +3225,32 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
 
   validate_spawn_worktree "treehouse get" "$T"
 
+  # A Treehouse pool is shared by repository origin, not by which home's clone
+  # asked for a slot: a slot `treehouse get` hands back here can be one that a
+  # DIFFERENT home's clone created via `git worktree add`, and a linked
+  # worktree never retargets to a new repo on its own return/get cycle. That
+  # slot is this project's in every sense Treehouse itself tracks (same pool,
+  # same pane, an ordinary isolated worktree per the guard just above) while
+  # still being, in Git's own terms, a different repository entirely - the
+  # exact mismatch bin/fm-claude-trust.sh's common-dir test exists to catch.
+  # Catching it here, before any fetch/reset or trust registration touches the
+  # slot, turns a wasted launch attempt (the trust guard refusing after the
+  # worktree is already "ready") into an immediate, self-explaining refusal,
+  # and skips running this project's base-refresh machinery against a worktree
+  # that is not this project's clone. No repair is attempted: the slot may be
+  # a live, legitimate worktree for whichever home actually created it, so
+  # nothing here returns, resets, or destroys it - that risks tearing down
+  # unlanded work that belongs to that other home, never this spawn's call to
+  # make. Fail closed with both common dirs as evidence instead.
+  if ! fm_treehouse_slot_identity "$PROJ_ABS" "$WT"; then
+    echo "error: could not resolve Treehouse pool identity for worktree $WT against spawning project $PROJ_ABS; refusing to launch into a slot whose identity cannot be verified; inspect window $T" >&2
+    exit 1
+  fi
+  if [ "$FM_TREEHOUSE_SLOT_IDENTITY" = foreign ]; then
+    echo "error: Treehouse pool slot $WT belongs to a different repository clone (its Git common dir is $FM_TREEHOUSE_SLOT_IDENTITY_COMMON, not this project's own $FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON); refusing to launch a worker into a foreign-identity copy; leaving the slot untouched since it may belong to another home's live work; inspect window $T" >&2
+    exit 1
+  fi
+
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
   # the pane above records only a process lease (Treehouse's durable
   # `get --lease --lease-holder`, which bin/fm-home-seed.sh uses for secondmate
@@ -3237,7 +3263,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # under its successor.
   # Written under the Treehouse project lock held from before slot allocation
   # through metadata publication, so no other spawn or return sees a half-claim.
-  if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
+  if [ "$FM_TREEHOUSE_SLOT_IDENTITY" = matches ]; then
     if ! fm_treehouse_slot_owner_claim "$WT" "$ID" "$FM_HOME"; then
       echo "error: could not claim Treehouse pool slot $WT for task $ID; refusing to launch a worker whose slot cannot later be proved to be its own; inspect window $T" >&2
       exit 1
