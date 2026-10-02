@@ -75,10 +75,10 @@ catalog_json() {  # <root>
 }
 
 test_report_candidate_included_with_backlog_context() {
-  local root out
+  local root
   root=$(fm_test_tmproot fm-reports-good)
   make_fixture "$root"
-  out=$(run_publish "$root" 2>"$root/stderr") || fail "publish failed: $(cat "$root/stderr")"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
 
   assert_contains "$(catalog_json "$root")" '"task_id": "task-good"' \
     "task-good should appear in the catalog"
