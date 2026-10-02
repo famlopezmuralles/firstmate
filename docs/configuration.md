@@ -605,6 +605,8 @@ Coverage is three-part, and the first and third parts share their inventory with
 - Every registered productive project clone under `projects/` - exactly what `fm-fleet-sync.sh` already syncs for this home (same clone-root, local-only, and no-origin-remote skip rules as the overnight fast-forward).
 - Both are read through `fm-fleet-sync.sh --check-only`: the identical candidate enumeration and skip logic as an ordinary sync, but it stops short of mutating anything - no branch pruning, no detached-HEAD recovery checkout, no fast-forward merge - and reports a clean, behind clone as `"<label>: N commits behind <base>"` instead of syncing it. The productive-clone walk always compares against `origin` and its own auto-detected default branch; only the explicit single-project form takes a remote/branch override.
 
+If a `config/watched-tools.json` git entry's repo is the same clone (by realpath) as a registered `projects/<name>` clone, it is checked once, under the watched-tools display name, and skipped on the `projects/` pass - never reported twice for the one physical repository.
+
 Every `STUCK:` clone (a dirty working tree, an off-default branch, or a diverged default) and every quantified "N commits behind" result is collected into exactly one `bin/fm-inbox.sh note`, which durably queues the detail and wakes firstmate at its next drain.
 A clean day with nothing behind writes nothing to the inbox.
 
