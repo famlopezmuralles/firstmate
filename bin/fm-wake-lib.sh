@@ -1231,14 +1231,19 @@ fm_treehouse_project_lock_path() {  # <project-dir>
 #               callers must not refuse on it
 # FM_TREEHOUSE_SLOT_IDENTITY_COMMON carries the worktree's own resolved common
 # dir as evidence when the identity is "foreign".
+# FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON carries the spawning project's own
+# resolved common dir, so a "foreign" verdict can be reported against the
+# project's actual Git identity rather than its working directory.
 # Returns 1 only on an input or resolution failure (not a real verdict); every
 # verdict otherwise returns 0 with FM_TREEHOUSE_SLOT_IDENTITY set.
 FM_TREEHOUSE_SLOT_IDENTITY=
 FM_TREEHOUSE_SLOT_IDENTITY_COMMON=
+FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON=
 fm_treehouse_slot_identity() {  # <project-dir> <worktree>
   local project=$1 worktree=$2 slot pool state project_common slot_common
   FM_TREEHOUSE_SLOT_IDENTITY=
   FM_TREEHOUSE_SLOT_IDENTITY_COMMON=
+  FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON=
   [ -d "$project" ] && [ -d "$worktree" ] || return 1
   slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
   pool=$(dirname "$(dirname "$slot")")
@@ -1251,6 +1256,8 @@ fm_treehouse_slot_identity() {  # <project-dir> <worktree>
   slot_common=$(git -C "$slot" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 1
   project_common=$(CDPATH='' cd -- "$project_common" 2>/dev/null && pwd -P) || return 1
   slot_common=$(CDPATH='' cd -- "$slot_common" 2>/dev/null && pwd -P) || return 1
+  # shellcheck disable=SC2034 # Output global, read by the sourcing caller.
+  FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON=$project_common
   if [ "$project_common" = "$slot_common" ]; then
     FM_TREEHOUSE_SLOT_IDENTITY=matches
   else

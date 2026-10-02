@@ -3247,7 +3247,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     exit 1
   fi
   if [ "$FM_TREEHOUSE_SLOT_IDENTITY" = foreign ]; then
-    echo "error: Treehouse pool slot $WT belongs to a different repository clone (its Git common dir is $FM_TREEHOUSE_SLOT_IDENTITY_COMMON, not this project's own $PROJ_ABS); refusing to launch a worker into a foreign-identity copy; leaving the slot untouched since it may belong to another home's live work; inspect window $T" >&2
+    echo "error: Treehouse pool slot $WT belongs to a different repository clone (its Git common dir is $FM_TREEHOUSE_SLOT_IDENTITY_COMMON, not this project's own $FM_TREEHOUSE_SLOT_IDENTITY_PROJECT_COMMON); refusing to launch a worker into a foreign-identity copy; leaving the slot untouched since it may belong to another home's live work; inspect window $T" >&2
     exit 1
   fi
 
@@ -3263,7 +3263,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # under its successor.
   # Written under the Treehouse project lock held from before slot allocation
   # through metadata publication, so no other spawn or return sees a half-claim.
-  if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
+  if [ "$FM_TREEHOUSE_SLOT_IDENTITY" = matches ]; then
     if ! fm_treehouse_slot_owner_claim "$WT" "$ID" "$FM_HOME"; then
       echo "error: could not claim Treehouse pool slot $WT for task $ID; refusing to launch a worker whose slot cannot later be proved to be its own; inspect window $T" >&2
       exit 1
