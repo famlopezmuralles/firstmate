@@ -381,6 +381,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/report-catalog.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/secondmate-parent-channel.md",
       "audience": "maintainer-architecture"
     },
