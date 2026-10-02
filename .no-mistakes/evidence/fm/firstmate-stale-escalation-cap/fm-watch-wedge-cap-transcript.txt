@@ -1,0 +1,37 @@
+Scenario harness: ran tests/fm-watch-triage.test.sh definitions (lines 1-4904, the
+pure function-definition prefix shared by all tests in that file) in isolation,
+invoking only the wedge-escalation tests relevant to this change, driving the
+real bin/fm-watch.sh subprocess against fake tmux/crew-state binaries exactly as
+the suite's own watch_bg/wedge-timer helpers do.
+
+=== Run against target commit 077bb0e (the fix) ===
+$ bash <harness sourcing tests/fm-watch-triage.test.sh:1-4904>
+  test_wedge_escalation_marks_demand_deep_inspection_after_threshold
+  test_wedge_escalation_caps_deep_inspection_repeats_on_unchanged_pane
+  test_wedge_escalation_resets_when_pane_becomes_active
+
+ok - consecutive wedge escalations on the same pane accumulate and demand deep inspection at the threshold
+ok - demand-deep-inspection is capped per unchanged pane revision without weakening a genuinely re-wedging pane
+ok - a pane becoming active again resets the consecutive wedge-escalation counter
+ALL_PASSED
+
+=== Regression check: same new test against base commit 9d26a84 (pre-fix) bin/fm-watch.sh ===
+bin/fm-watch.sh temporarily swapped for the base-commit version (git show
+9d26a84...:bin/fm-watch.sh), new test re-run, then bin/fm-watch.sh restored
+to the target-commit content (verified via `git status --short` / `git diff --stat`
+showing a clean worktree at 077bb0e afterward):
+
+$ bash <harness: tests/fm-watch-triage.test.sh:1-4904 + test_wedge_escalation_caps_deep_inspection_repeats_on_unchanged_pane>
+
+not ok - round 4 repeated demand-deep-inspection on an unchanged pane revision:
+stale: test:fm-wedged-cap (idle 502s, possible wedge, escalation 4,
+demand-deep-inspection: same pane has wedge-escalated 4 times in a row - do not
+re-absorb on the run-step/pane state alone)
+
+This reproduces the exact FillRoute incident shape the new test replays: on
+pre-fix code, round 4 (an escalation past the threshold on the SAME unchanged
+pane hash) repeats the costly demand-deep-inspection marker instead of falling
+back to a cheap "already deep-inspected" signal. The fix (077bb0e) makes round 4
+fall back correctly while leaving round 3 (the first threshold crossing) and the
+escalation counter/cadence untouched, and still re-earns a fresh
+demand-deep-inspection once the pane hash genuinely changes.
