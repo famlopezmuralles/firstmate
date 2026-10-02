@@ -589,6 +589,23 @@ A restart failure or a verify failure is reported through the same inbox alert, 
 These commands are local, gitignored, operator-authored configuration, read with `jq` (required only when this file is present): the script does not itself add any force, discard, or database-recreation behavior, but it also cannot enforce that the configured commands avoid it, so keep this file held to the same guarded, reversible intent as the fast-forward-only contract above it.
 This file is not inherited by secondmate homes, matching the main-home-only scope of the cron itself.
 
+## Daily update alert
+
+`bin/fm-update-check-cron.sh` is an OS-cron entrypoint, not a session-bound check: it exists so the captain gets one daily alert naming every repository that needs attention, even when no firstmate session is running to drive it.
+It is the read-only sibling of `fm-prod-ff-cron.sh` above: where that cron fetches and fast-forwards a clean clone overnight, this one only reports - even on a clean clone - and never fast-forwards, stashes, commits, discards, or forces anything.
+Install its schedule once with `bin/fm-update-check-cron-install.sh install [<minute 0-59>]`, which writes a single crontab line inside the 06:00-06:59 window (hour fixed at 6, after the 03:00-03:59 overnight fast-forward window so a freshly fast-forwarded clone is never wrongly reported as behind; minute defaults to 15) tagged with its own marker comment so re-running `install` replaces this home's own line instead of duplicating it.
+`status` reports whether it is installed and `uninstall` removes only this home's marked line.
+Both the entrypoint and the installer refuse outright in a secondmate home: this automation is main-home only.
+
+Coverage is three-part, and the first and third parts share their inventory with `fm-fleet-sync.sh` so this check and the overnight fast-forward can never disagree about which copies are covered:
+
+- Every git-backed tool source registered in `config/watched-tools.json` (AGENTS.md section 2; see "Watched tool updates" below) - in a real home this is where firstmate's own entry lives (`{"name": "firstmate", "git": {"repo": "...", "remote": "origin"}}`), so firstmate itself is covered without anything here being hardcoded to a particular checkout path. A watched-tools.json entry with no `git` field (no-mistakes today, since its install is a built binary with no local git clone, plus herdr, treehouse, and the axi tools) has no local clone for this comparison and is left entirely to its own existing owner, `bin/fm-tool-update-check.sh`, which detects a published update by version or announcement instead; this cron never duplicates that mechanism.
+- Every registered productive project clone under `projects/` - exactly what `fm-fleet-sync.sh` already syncs for this home (same clone-root, local-only, and no-origin-remote skip rules as the overnight fast-forward).
+- Both are read through `fm-fleet-sync.sh --check-only`: the identical candidate enumeration and skip logic as an ordinary sync, but it stops short of mutating anything - no branch pruning, no detached-HEAD recovery checkout, no fast-forward merge - and reports a clean, behind clone as `"<label>: N commits behind <base>"` instead of syncing it.
+
+Every `STUCK:` clone (a dirty working tree, an off-default branch, or a diverged default) and every quantified "N commits behind" result is collected into exactly one `bin/fm-inbox.sh note`, which durably queues the detail and wakes firstmate at its next drain.
+A clean day with nothing behind writes nothing to the inbox.
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.

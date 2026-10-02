@@ -24,7 +24,7 @@
 # killed mid-write - e.g. a timed-out bootstrap sync or a teardown process kill),
 # it is retried with a bounded wait and removed only when provably stale; see
 # fetch_with_packed_refs_lock_guard and the FM_FLEET_SYNC_PACKED_REFS_LOCK_* knobs.
-# Usage: fm-fleet-sync.sh [<project-dir-or-name>]
+# Usage: fm-fleet-sync.sh [--check-only] [<project-dir-or-name>]
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -32,6 +32,13 @@
 # falling back to an explicit path. Example: from anywhere,
 # `fm-fleet-sync.sh dotfiles-private` syncs just that one clone, same as
 # passing its full projects/dotfiles-private path.
+#
+# --check-only (used by fm-update-check-cron.sh) walks the exact same clone
+# enumeration and skip rules, and still fetches (read-only to the working
+# tree), but never prunes a gone branch, never re-attaches a detached HEAD,
+# and never fast-forwards: a clone that is clean and behind is reported as
+# "<label>: N commits behind <base>" instead of being synced. Every other
+# outcome (already current, STUCK, or a benign skip) is unchanged.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,12 +70,18 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
 fi
 
 usage() {
-  echo "usage: fm-fleet-sync.sh [<project-dir-or-name>]" >&2
+  echo "usage: fm-fleet-sync.sh [--check-only] [<project-dir-or-name>]" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage
   exit 0
+fi
+
+CHECK_ONLY=0
+if [ "${1:-}" = "--check-only" ]; then
+  CHECK_ONLY=1
+  shift
 fi
 [ $# -le 1 ] || { usage; exit 1; }
 
@@ -344,7 +357,7 @@ sync_project() {
     return 0
   fi
 
-  prune_gone_branches || true
+  [ "$CHECK_ONLY" = 1 ] || prune_gone_branches || true
 
   DEFAULT=$(default_branch) || {
     echo "$label: skipped: cannot determine default branch"
@@ -370,7 +383,7 @@ sync_project() {
     # non-default named branch, a detached HEAD with unique commits, a dirty tree,
     # or <default> already checked out elsewhere - may hold real work, so it is
     # reported loudly and left untouched.
-    if [ -z "$cur" ] && [ "$dirty" = no ] \
+    if [ "$CHECK_ONLY" = 0 ] && [ -z "$cur" ] && [ "$dirty" = no ] \
         && git -C "$PROJ" merge-base --is-ancestor HEAD "$BASE" 2>/dev/null \
         && ! default_checked_out_elsewhere \
         && local_default_safe_for_recovery; then
@@ -413,6 +426,12 @@ sync_project() {
   fi
   if ! git -C "$PROJ" merge-base --is-ancestor "$DEFAULT" "$BASE"; then
     report_stuck "diverged $DEFAULT"
+    return 0
+  fi
+
+  if [ "$CHECK_ONLY" = 1 ]; then
+    count=$(git -C "$PROJ" rev-list --count "$DEFAULT..$BASE" 2>/dev/null) || count="?"
+    echo "$label: $count commits behind $BASE"
     return 0
   fi
 
