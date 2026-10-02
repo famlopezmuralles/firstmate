@@ -2974,6 +2974,119 @@ test_wedge_escalation_marks_demand_deep_inspection_after_threshold() {
   pass "consecutive wedge escalations on the same pane accumulate and demand deep inspection at the threshold"
 }
 
+# --- demand-deep-inspection is capped per unchanged pane revision -----------
+# 2026-10 FillRoute cost incident: a finished worker sat idle at its prompt
+# awaiting teardown while its pane hash never changed. Each STALE_ESCALATE_SECS
+# tick re-fired wedge_timer_check, and once the consecutive-escalation count
+# passed FM_WEDGE_DEMAND_INSPECT_COUNT, EVERY further escalation on that same
+# unchanged hash carried the "demand-deep-inspection" marker, forcing a full
+# supervision-branch investigation every poll for 6 hours (749 model calls,
+# ~$14) even though nothing about the pane had changed since the first such
+# investigation. This test replays that shape: the first threshold crossing
+# must still demand deep inspection (unchanged from before), every further
+# escalation on the SAME unchanged hash must fall back to a cheap marker
+# instead of repeating it, and a genuine change in pane content (real new
+# evidence) must restore full-strength escalation at the next threshold,
+# proving a truly re-wedging pane is never silenced.
+test_wedge_escalation_caps_deep_inspection_repeats_on_unchanged_pane() {
+  local dir state fakebin out capture_file window key pane_hash sig pid n
+  dir=$(make_case wedge-escalation-cap); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"
+  window="test:fm-wedged-cap"
+  printf 'idle at prompt, awaiting teardown' > "$capture_file"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/wedged-cap.meta"
+  printf 'working: still monitoring ci\n' > "$state/wedged-cap.status"
+  sig=$(seen_sig "$state/wedged-cap.status"); printf '%s' "$sig" > "$state/.seen-wedged-cap_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle at prompt, awaiting teardown")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+
+  # Priming round: first sighting of this stale hash classifies and absorbs it,
+  # establishing .stale-$key and starting the wedge timer.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher exited on the priming round (should absorb): $(cat "$out")"
+  fi
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional wedge priming stop"
+
+  # Six consecutive escalations on the exact same unchanged pane hash: round 3
+  # crosses FM_WEDGE_DEMAND_INSPECT_COUNT's default threshold and must demand
+  # deep inspection, exactly as before. Rounds 4-6 must escalate on the same
+  # schedule (the counter keeps climbing, so a genuinely frozen pane is never
+  # silenced) but must NOT repeat the costly marker, since nothing changed
+  # since round 3 already forced the one investigation this revision earns.
+  n=1
+  while [ "$n" -le 6 ]; do
+    echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+    : > "$out"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    pid=$!
+    wait_for_exit "$pid" 100 || fail "watcher did not escalate on unchanged-pane round $n: $(cat "$out")"
+    grep -F "escalation $n" "$out" >/dev/null || fail "round $n did not report escalation count $n: $(cat "$out")"
+    if [ "$n" -lt 3 ]; then
+      grep -F "demand-deep-inspection" "$out" >/dev/null && fail "round $n escalated to demand-deep-inspection before the threshold: $(cat "$out")"
+    elif [ "$n" -eq 3 ]; then
+      grep -F "demand-deep-inspection" "$out" >/dev/null || fail "round $n (threshold) did not demand deep inspection: $(cat "$out")"
+    else
+      grep -F "demand-deep-inspection" "$out" >/dev/null && fail "round $n repeated demand-deep-inspection on an unchanged pane revision: $(cat "$out")"
+      grep -F "already deep-inspected" "$out" >/dev/null || fail "round $n gave no cheap-absorb signal for a capped repeat: $(cat "$out")"
+    fi
+    ack_stopped_cycle "$state" || fail "could not acknowledge unchanged-pane round $n"
+    n=$((n + 1))
+  done
+  [ "$(cat "$state/.wedge-escalations-$key" 2>/dev/null || echo 0)" = 6 ] || fail "escalation counter did not keep climbing across capped repeats"
+
+  # Real new evidence: the pane content actually changes. The next first-sight
+  # classification must reset both the escalation count and the deep-inspection
+  # cap, so a freshly re-wedging pane earns its own full investigation again
+  # rather than staying permanently silenced by the earlier cap. Reseed
+  # .hash-$key/.count-$key the same way the suite's own priming rounds do, so
+  # this one run lands directly on the new hash's first-sight classification
+  # instead of spending extra polls just catching up the two-consecutive-poll
+  # staleness gate to the new revision.
+  printf 'new output, crew active again' > "$capture_file"
+  pane_hash=$(hash_text "new output, crew active again")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "watcher exited reclassifying the changed pane: $(cat "$out")"
+  fi
+  [ ! -e "$state/.wedge-escalations-$key" ] || fail "a changed pane hash did not reset the escalation counter"
+  [ ! -e "$state/.wedge-deep-inspected-$key" ] || fail "a changed pane hash did not reset the deep-inspection cap"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the reclassification round"
+
+  n=1
+  while [ "$n" -le 3 ]; do
+    echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+    : > "$out"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+      FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_STALE_ESCALATE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+      FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+    pid=$!
+    wait_for_exit "$pid" 100 || fail "watcher did not re-escalate the new pane revision on round $n: $(cat "$out")"
+    ack_stopped_cycle "$state" || fail "could not acknowledge new-revision round $n"
+    n=$((n + 1))
+  done
+  grep -F "demand-deep-inspection" "$out" >/dev/null \
+    || fail "a genuinely new wedge streak did not re-earn demand-deep-inspection at its own threshold: $(cat "$out")"
+  unset FM_FAKE_CREW_STATE
+  pass "demand-deep-inspection is capped per unchanged pane revision without weakening a genuinely re-wedging pane"
+}
+
 test_wedge_escalation_resets_when_pane_becomes_active() {
   local dir state fakebin out capture_file window key pane_hash sig pid
   dir=$(make_case wedge-escalation-reset); state="$dir/state"; fakebin="$dir/fakebin"
@@ -4845,6 +4958,7 @@ test_terminal_stale_surfaced
 test_stale_terminal_status_overridden_by_active_run
 test_nonterminal_stale_provably_working_absorbed_then_escalated
 test_wedge_escalation_marks_demand_deep_inspection_after_threshold
+test_wedge_escalation_caps_deep_inspection_repeats_on_unchanged_pane
 test_wedge_escalation_resets_when_pane_becomes_active
 test_busy_pane_below_turn_age_bound_is_absorbed
 test_busy_pane_stable_hash_escalates_past_turn_age_bound
