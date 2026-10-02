@@ -558,6 +558,37 @@ The sweep must finish inside `FM_CHECK_TIMEOUT` (default 30), because a run the 
 So a budget larger than that timeout allows is cut down to what fits instead of being refused, and the cut is reported in the report line.
 A budget that is not a whole number from 1 to 120 is still refused outright.
 
+## Early-morning productive fast-forward (config/prod-ff-services.json)
+
+`bin/fm-prod-ff-cron.sh` is an OS-cron entrypoint, not a session-bound check: it exists so the main home's productive project clones get fetched and fast-forwarded overnight even when no firstmate session is running to drive it.
+Install its schedule once with `bin/fm-prod-ff-cron-install.sh install [<minute 0-59>]`, which writes a single crontab line inside the 03:00-03:59 window (hour fixed at 3, minute defaults to 15) tagged with a marker comment so re-running `install` replaces this home's own line instead of duplicating it.
+`status` reports whether it is installed and `uninstall` removes only this home's marked line.
+Both the cron entrypoint and the installer refuse outright in a secondmate home: this automation is main-home only, and a secondmate's `projects/` is never touched by it.
+
+Coverage is exactly what `bin/fm-fleet-sync.sh` already syncs for this home: every clone under `projects/` that is its own clone root, has an `origin` remote, and is not registered `local-only` in `data/projects.md` (AGENTS.md section 2).
+The cron script adds nothing to that fetch-plus-fast-forward-only contract and never stashes, commits, discards, or forces anything; a clone it cannot safely fast-forward is left untouched exactly as `fm-fleet-sync.sh` always leaves it, and is instead reported as an alert (below).
+
+Every outcome `fm-fleet-sync.sh` reports outside its own benign set - already current, synced, recovered, pruned, or a benign skip (local-only, no origin remote, not a directory/git repo/clone root) - is read as needing captain attention.
+That covers every `STUCK:` clone (a dirty working tree, an off-default branch, or a diverged default) and every fetch or fast-forward failure.
+Each such run is delivered as one `bin/fm-inbox.sh note`, which durably queues the detail and wakes firstmate at its next drain; a clean night with nothing needing attention writes nothing to the inbox.
+
+Optionally, `config/prod-ff-services.json` names a restart and a verify command per project:
+
+```json
+{
+  "services": [
+    { "name": "<project name, matching its projects/<name> clone>",
+      "restart": "<shell command, run with the clone as its working directory>",
+      "verify": "<shell command; a non-zero exit means verification failed>" }
+  ]
+}
+```
+
+A project's restart and verify commands run only when that project's clone was actually fast-forwarded that night - never on a no-op (`already current`, or a `recovered:` re-attach with nothing new to sync) and never on a `STUCK:` clone.
+A restart failure or a verify failure is reported through the same inbox alert, naming the project and the command that failed.
+These commands are local, gitignored, operator-authored configuration, read with `jq` (required only when this file is present): the script does not itself add any force, discard, or database-recreation behavior, but it also cannot enforce that the configured commands avoid it, so keep this file held to the same guarded, reversible intent as the fast-forward-only contract above it.
+This file is not inherited by secondmate homes, matching the main-home-only scope of the cron itself.
+
 ## Mail plane (.env)
 
 The mail plane (bin/fm-mail.sh) reads unseen IMAP messages and sends one SMTP message.
