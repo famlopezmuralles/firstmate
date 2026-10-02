@@ -64,7 +64,7 @@ BENIGN_RE='^[^:]+: (already current|synced |recovered:|pruned |skipped: (local-o
 # Outcomes that actually moved the local default branch forward: restart-eligible.
 UPDATED_RE='^([^:]+): (synced |recovered: .*synced )'
 
-OUT=$("$FM_ROOT/bin/fm-fleet-sync.sh" 2>&1)
+OUT=$("$FM_ROOT/bin/fm-fleet-sync.sh" 2>/dev/null)
 RC=$?
 
 ALERT_LINES=""
