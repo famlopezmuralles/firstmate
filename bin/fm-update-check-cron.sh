@@ -45,6 +45,7 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 WATCHED_TOOLS="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/watched-tools.json"
+PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 export FM_HOME FM_ROOT
 
 # shellcheck source=bin/fm-primary-scope-lib.sh
@@ -115,9 +116,13 @@ EOF
 }
 
 # collect_fleet: every registered productive project clone under projects/,
-# via the whole-fleet form - identical inventory to fm-prod-ff-cron.sh.
+# via the whole-fleet form - identical inventory to fm-prod-ff-cron.sh. Each
+# line is labeled with its project dir's basename, so the same realpath
+# already marked seen by collect_named (a watched-tools.json git entry whose
+# repo is this same clone) is skipped here too - the SEEN_PATHS guarantee
+# applies across both collection passes, not just within collect_named's own.
 collect_fleet() {
-  local out line
+  local out line label path abs
   out=$("$FLEET_SYNC" --check-only 2>/dev/null)
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -125,6 +130,10 @@ collect_fleet() {
       *': '*) ;;
       *) continue ;;
     esac
+    label=${line%%: *}
+    path="$PROJECTS/$label"
+    abs=$(cd "$path" 2>/dev/null && pwd -P) || abs=""
+    [ -n "$abs" ] && already_seen "$abs" && continue
     if printf '%s\n' "$line" | grep -Eq "$BEHIND_RE"; then
       add_alert "$line"
     fi

@@ -296,6 +296,24 @@ JSON
   pass "a watched-tools.json git.branch override is honored instead of comparing against the wrong branch"
 }
 
+test_watched_tool_sharing_a_projects_clone_is_reported_once() {
+  local home clone occurrences
+  home=$(new_primary_home)
+  clone=$(build_pair "$home" shared)
+  advance_origin "$home" shared C1
+
+  cat > "$home/config/watched-tools.json" <<JSON
+{"tools":[{"name":"shared","git":{"repo":"$clone"}}]}
+JSON
+
+  run_check "$home" >/dev/null
+
+  [ "$(note_count "$home")" -eq 1 ] || fail "a clone registered both as a watched tool and under projects/ must still raise exactly one inbox note"
+  occurrences=$(printf '%s\n' "$(note_bodies "$home")" | grep -c '^shared: 1 commits behind origin/main$')
+  [ "$occurrences" -eq 1 ] || fail "a clone registered both as a watched tool and under projects/ must be reported exactly once, not once per registration (got $occurrences)"
+  pass "a git-backed watched-tools.json entry that is also a registered projects/ clone is reported exactly once"
+}
+
 test_cron_refuses_in_secondmate_home() {
   local home out rc
   home=$(new_secondmate_home)
@@ -358,6 +376,7 @@ test_multiple_behind_clones_consolidate_into_one_note
 test_git_backed_watched_tool_is_checked_and_relabeled
 test_git_backed_watched_tool_honors_remote_override
 test_git_backed_watched_tool_honors_branch_override
+test_watched_tool_sharing_a_projects_clone_is_reported_once
 test_cron_refuses_in_secondmate_home
 test_install_status_uninstall_idempotent
 test_install_refuses_in_secondmate_home
