@@ -1,0 +1,335 @@
+{
+  "generated": "2026-10-01T23:56:46Z",
+  "reports": [
+    {
+      "title": "Ship: close unauthenticated legacy execution path (executeImmediately, demo-session fallback, mt4-alert)",
+      "home": "main",
+      "project": "fillroute",
+      "task_id": "fillroute-close-unauth-exec",
+      "updated": "2026-10-01T21:07:28Z",
+      "pr_url": "https://github.com/famlopezmuralles/FillRoute/pull/192",
+      "html_path": "reports/main/fillroute-close-unauth-exec/mutation-audit-2026-10-01.html",
+      "historical": false
+    },
+    {
+      "title": "Ship: close unauthenticated legacy execution path (executeImmediately, demo-session fallback, mt4-alert)",
+      "home": "main",
+      "project": "fillroute",
+      "task_id": "fillroute-close-unauth-exec",
+      "updated": "2026-10-01T17:57:02Z",
+      "pr_url": "https://github.com/famlopezmuralles/FillRoute/pull/192",
+      "html_path": "reports/main/fillroute-close-unauth-exec/cd-verification.html",
+      "historical": false
+    },
+    {
+      "title": "Restore casa-vm isolated PR runner and prove disposable isolation with a real PR job",
+      "home": "main",
+      "project": "centinela",
+      "task_id": "centinela-restore-casa-vm",
+      "updated": "2026-10-01T14:18:11Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-restore-casa-vm/report.html",
+      "historical": false
+    },
+    {
+      "title": "Scout (Opus): verify live FillRoute deployment and execution-readiness gap",
+      "home": "main",
+      "project": "centinela",
+      "task_id": "centinela-fillroute-live-verify",
+      "updated": "2026-10-01T06:25:04Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-fillroute-live-verify/report.html",
+      "historical": false
+    },
+    {
+      "title": "Verify Scrutiny DAG TradingView alert endpoint and FillRoute contract",
+      "home": "main",
+      "project": "centinela",
+      "task_id": "centinela-scrutiny-fillroute-endpoint-contract",
+      "updated": "2026-09-30T02:23:46Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-scrutiny-fillroute-endpoint-contract/report.html",
+      "historical": false
+    },
+    {
+      "title": "Investigate Centinela TradingView webhook signal recording and execution",
+      "home": "main",
+      "project": "centinela",
+      "task_id": "centinela-tv-webhook-signal-execution",
+      "updated": "2026-09-30T00:36:27Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-tv-webhook-signal-execution/report.html",
+      "historical": false
+    },
+    {
+      "title": "Review today's TradingView alerts received in Centinela",
+      "home": "main",
+      "project": "centinela",
+      "task_id": "centinela-tv-alerts-today-review",
+      "updated": "2026-09-30T00:30:10Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-tv-alerts-today-review/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-fx-provider-alternatives",
+      "updated": "2026-09-29T14:12:49Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-fx-provider-alternatives/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-bridge-timeout-diagnosis",
+      "updated": "2026-09-29T07:55:37Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-bridge-timeout-diagnosis/report.html",
+      "historical": false
+    },
+    {
+      "title": "Scout: verify FX ingestion and E2 health after PR 523",
+      "home": "main",
+      "project": "centinela",
+      "task_id": "centinela-fx-e2-health-verify",
+      "updated": "2026-09-29T04:07:34Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-fx-e2-health-verify/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-factory-pr-smoke",
+      "updated": "2026-09-28T16:24:42Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-factory-pr-smoke/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-520-isolated-pilot",
+      "updated": "2026-09-28T14:55:36Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-520-isolated-pilot/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-premerge-sweep-link",
+      "updated": "2026-09-28T12:50:55Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-premerge-sweep-link/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-activation-reconcile",
+      "updated": "2026-09-27T17:12:34Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-activation-reconcile/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-boot-autostart-diagnosis",
+      "updated": "2026-09-27T07:40:04Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-boot-autostart-diagnosis/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-llm-providers-diagnosis",
+      "updated": "2026-09-26T16:36:19Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-llm-providers-diagnosis/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-registry-unmerged-0916",
+      "updated": "2026-09-26T15:36:28Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-registry-unmerged-0916/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-stocks-funnel-evidence",
+      "updated": "2026-09-26T10:05:24Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-stocks-funnel-evidence/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-launch-unknown-alert",
+      "updated": "2026-09-26T08:02:17Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-launch-unknown-alert/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-xcom-reclaim",
+      "updated": "2026-09-26T03:41:11Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-xcom-reclaim/report.html",
+      "historical": false
+    },
+    {
+      "title": "providers",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-fx-eurusd-dukascopy",
+      "updated": "2026-09-26T03:23:21Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-fx-eurusd-dukascopy/providers.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-grafana-import",
+      "updated": "2026-09-26T03:17:20Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-grafana-import/report.html",
+      "historical": false
+    },
+    {
+      "title": "xcom evidence",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-xcom-distributor",
+      "updated": "2026-09-25T23:47:06Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-xcom-distributor/xcom-evidence.html",
+      "historical": false
+    },
+    {
+      "title": "Scout: Centinela backup audit - scope and lake replica recoverability",
+      "home": "main",
+      "project": "centinela",
+      "task_id": "centinela-backup-audit",
+      "updated": "2026-09-25T21:43:36Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-backup-audit/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-grafana-grok-quota",
+      "updated": "2026-09-25T02:55:16Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-grafana-grok-quota/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-status-twelvedata",
+      "updated": "2026-09-25T01:43:50Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-status-twelvedata/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-activation-verify",
+      "updated": "2026-09-23T05:16:11Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-activation-verify/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-endtoend-audit",
+      "updated": "2026-09-21T14:28:05Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-endtoend-audit/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-distributor-v2-check",
+      "updated": "2026-09-21T04:20:22Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-distributor-v2-check/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-champ-candidates-bottleneck-scout",
+      "updated": "2026-09-19T03:33:49Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-champ-candidates-bottleneck-scout/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-sf-runup-scout",
+      "updated": "2026-09-16T06:05:11Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-sf-runup-scout/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "centinela-registry-pr-scan",
+      "updated": "2026-09-16T05:39:21Z",
+      "pr_url": null,
+      "html_path": "reports/main/centinela-registry-pr-scan/report.html",
+      "historical": false
+    },
+    {
+      "title": "report",
+      "home": "main",
+      "project": null,
+      "task_id": "sprint-carry-audit",
+      "updated": "2026-09-14T05:12:18Z",
+      "pr_url": null,
+      "html_path": "reports/main/sprint-carry-audit/report.html",
+      "historical": false
+    }
+  ]
+}

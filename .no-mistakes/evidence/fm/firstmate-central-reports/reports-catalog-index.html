@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Firstmate report catalog</title>
+<style>
+:root{color-scheme:light dark;}
+body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+  max-width:860px;margin:0 auto;padding:1.5rem;line-height:1.55;}
+header.provenance{border:1px solid #8884;border-radius:8px;padding:0.75rem 1rem;
+  margin-bottom:1.5rem;font-size:0.9rem;}
+header.provenance dl{display:grid;grid-template-columns:auto 1fr;gap:0.15rem 0.75rem;margin:0;}
+header.provenance dt{font-weight:600;opacity:0.75;}
+header.provenance dd{margin:0;word-break:break-word;}
+table{border-collapse:collapse;width:100%;margin:1rem 0;}
+th,td{border:1px solid #8884;padding:0.4rem 0.6rem;text-align:left;vertical-align:top;}
+pre{background:#8881;padding:0.75rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap;}
+code{background:#8881;padding:0.1rem 0.3rem;border-radius:4px;}
+pre code{background:none;padding:0;}
+.badge{display:inline-block;font-size:0.75rem;border-radius:4px;padding:0.1rem 0.5rem;
+  background:#c8891a33;border:1px solid #c8891a88;margin-left:0.5rem;}
+a{word-break:break-word;}
+@media (max-width:600px){body{padding:1rem;}}
+
+table.catalog{font-size:0.92rem;}
+input#q{width:100%;padding:0.5rem;font-size:1rem;margin-bottom:1rem;
+  box-sizing:border-box;}
+.unavailable{border:1px solid #c0392b66;border-radius:8px;padding:0.75rem 1rem;
+  margin:1rem 0;font-size:0.9rem;}
+.limitations{opacity:0.8;font-size:0.85rem;}
+tr.historical{opacity:0.65;}
+</style>
+</head><body>
+<h1>Firstmate report catalog</h1>
+<p>Generated 2026-10-01T23:56:46Z. Local machine only.</p>
+<div class="unavailable"><strong>Some sources were unavailable this run:</strong>
+<ul><li>secondmates registry: data/secondmates.md is absent or unsafe; only this home&#x27;s own reports were scanned</li></ul></div>
+<input id="q" type="search" placeholder="Search by title, project, home, or task id&hellip;">
+<table class="catalog" id="catalog">
+<thead><tr><th>Report</th><th>Home</th><th>Project</th><th>Task</th><th>Updated</th><th>PR</th></tr></thead>
+<tbody></tbody>
+</table>
+<p class="limitations">Known limitations:</p><ul class="limitations"><li>Remote homes (reached only through the registered SSH route) are discovered through their own literal data/&lt;task&gt;/report.md files only; supplemental non-report.md reports on a remote home are not mirrored here.</li></ul>
+<script>
+let ROWS = [];
+function cell(text){ const d=document.createElement('td'); d.textContent=text||''; return d; }
+function render(rows){
+  const tbody = document.querySelector('#catalog tbody');
+  tbody.innerHTML = '';
+  for (const r of rows) {
+    const tr = document.createElement('tr');
+    if (r.historical) tr.className = 'historical';
+    const titleTd = document.createElement('td');
+    const a = document.createElement('a');
+    a.href = r.html_path;
+    a.textContent = r.title + (r.historical ? ' (historical)' : '');
+    titleTd.appendChild(a);
+    tr.appendChild(titleTd);
+    tr.appendChild(cell(r.home));
+    tr.appendChild(cell(r.project || 'unknown'));
+    tr.appendChild(cell(r.task_id));
+    tr.appendChild(cell(r.updated));
+    const prTd = document.createElement('td');
+    if (r.pr_url) {
+      const pa = document.createElement('a');
+      pa.href = r.pr_url; pa.textContent = 'PR'; pa.target = '_blank';
+      pa.rel = 'noopener noreferrer';
+      prTd.appendChild(pa);
+    }
+    tr.appendChild(prTd);
+    tbody.appendChild(tr);
+  }
+}
+function applyFilter(){
+  const q = document.querySelector('#q').value.toLowerCase();
+  if (!q) { render(ROWS); return; }
+  render(ROWS.filter(r =>
+    (r.title && r.title.toLowerCase().includes(q)) ||
+    (r.project && r.project.toLowerCase().includes(q)) ||
+    (r.home && r.home.toLowerCase().includes(q)) ||
+    (r.task_id && r.task_id.toLowerCase().includes(q))
+  ));
+}
+fetch('catalog.json').then(r => r.json()).then(data => {
+  ROWS = data.reports || [];
+  render(ROWS);
+  document.querySelector('#q').addEventListener('input', applyFilter);
+});
+</script>
+</body></html>

@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Ship: close unauthenticated legacy execution path (executeImmediately, demo-session fallback, mt4-alert)</title>
+<style>
+:root{color-scheme:light dark;}
+body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+  max-width:860px;margin:0 auto;padding:1.5rem;line-height:1.55;}
+header.provenance{border:1px solid #8884;border-radius:8px;padding:0.75rem 1rem;
+  margin-bottom:1.5rem;font-size:0.9rem;}
+header.provenance dl{display:grid;grid-template-columns:auto 1fr;gap:0.15rem 0.75rem;margin:0;}
+header.provenance dt{font-weight:600;opacity:0.75;}
+header.provenance dd{margin:0;word-break:break-word;}
+table{border-collapse:collapse;width:100%;margin:1rem 0;}
+th,td{border:1px solid #8884;padding:0.4rem 0.6rem;text-align:left;vertical-align:top;}
+pre{background:#8881;padding:0.75rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap;}
+code{background:#8881;padding:0.1rem 0.3rem;border-radius:4px;}
+pre code{background:none;padding:0;}
+.badge{display:inline-block;font-size:0.75rem;border-radius:4px;padding:0.1rem 0.5rem;
+  background:#c8891a33;border:1px solid #c8891a88;margin-left:0.5rem;}
+a{word-break:break-word;}
+@media (max-width:600px){body{padding:1rem;}}
+</style>
+</head><body>
+<p><a href="../../../index.html">&larr; Back to report catalog</a></p>
+<h1>Ship: close unauthenticated legacy execution path (executeImmediately, demo-session fallback, mt4-alert)</h1>
+<header class="provenance"><dl><dt>Home</dt><dd>main</dd><dt>Task</dt><dd>fillroute-close-unauth-exec</dd><dt>Source file</dt><dd>/home/lopezc/.treehouse/firstmate-7f8e45/4/firstmate/data/fillroute-close-unauth-exec/cd-verification.md</dd><dt>Last updated</dt><dd>2026-10-01T17:57:02Z</dd><dt>Project</dt><dd>fillroute</dd><dt>Linked PR</dt><dd><a href="https://github.com/famlopezmuralles/FillRoute/pull/192">https://github.com/famlopezmuralles/FillRoute/pull/192</a></dd><dt>Backlog state</dt><dd>in_flight</dd></dl></header>
+<h1>FillRoute: merge-time backend CD and automerge verdict</h1>
+<p>Date: 2026-10-01 UTC. Main-firstmate order <code>corr=a71abe8395504b84</code>, narrowed by inbox <code>010.msg</code>. Target: <a href="https://github.com/famlopezmuralles/FillRoute/pull/192" rel="noopener noreferrer" target="_blank">https://github.com/famlopezmuralles/FillRoute/pull/192</a> Feature head: <code>42749afd3c7e71bb10fc4b02fe4a38d821e6f00a</code>. Verified current default-main head: <code>c4e2edcd0aabb0077385434b52cbdc801f864468</code>.</p>
+<h2>Verdict</h2>
+<p><strong>Merging this change into main would automatically schedule backend staging deployment, without another command and independently of main-push CI completion. It would not trigger backend production deployment from that main push.</strong> Deploy Staging is active; Promote to Production is disabled manually; Deploy to VPS is active but only listens to release-tag pushes or manual dispatch, not main pushes or CI completion.</p>
+<p><strong>There is no automerge authorization.</strong> Main-firstmate confirmed the repository API reports <code>allow_auto_merge:false</code>. More importantly, this security-sensitive change is explicitly reserved for the captain&#x27;s merge word; standing merge authority does not apply. The merge reservation is not an assertion of red PR CI: the previously verified change had 11/11 checks green. The failed staging ship-gate below is a separate historical post-deployment check, not evidence that this change&#x27;s PR checks are red.</p>
+<p>A manual “no deploy” instruction does not disable Actions. The accurate worker statement is “I did not merge, dispatch, or run a deployment.” If an authorized merge happens, its resulting main push is itself sufficient to trigger configured staging CD. <code>allow_auto_merge:false</code> does not disable a manual merge or its Actions side effects.</p>
+<h2>Current triggers and conditions</h2>
+<p>The current-main workflow tree and the inspected local workflow tree are identical Git objects: <code>e449d6b3159285f9ea3ebd10494a72f61cd29c40</code>. Remote branch/default-branch and live workflow states were queried through read-only <code>gh-axi</code> GETs.</p>
+<table><thead><tr>
+<th>Workflow</th>
+<th>Live state</th>
+<th>Trigger</th>
+<th>Relevant conditions and effect</th>
+</tr></thead><tbody>
+<tr>
+<td>Deploy Staging</td>
+<td>active</td>
+<td><code>push</code> to main; manual <code>workflow_dispatch</code></td>
+<td>No path filter, separate-CI prerequisite, job-level approval condition, or named environment on the deploy job. Staging concurrency has <code>cancel-in-progress:false</code>. Its post-deploy gate has <code>needs:deploy-staging</code>, so deployment comes first.</td>
+</tr>
+<tr>
+<td>Promote to Production</td>
+<td>disabled_manually</td>
+<td>Configured cron <code>0 14 1,15 * *</code>; manual <code>workflow_dispatch</code></td>
+<td>Disabled now, so its schedule does not currently run. Optional <code>ref</code> defaults main; optional boolean <code>force</code> defaults false; optional <code>reason</code> defaults empty. When enabled, non-forced HEAD already matching the latest release tag skips release actions. Optional staging <code>/health</code> preflight is not a CI-result dependency. The job names <code>environment:Production</code>; this declaration is not itself a required captain approval.</td>
+</tr>
+<tr>
+<td>Deploy to VPS</td>
+<td>active</td>
+<td>Push of a <code>20*</code> tag; manual <code>workflow_dispatch</code> with required <code>tag</code></td>
+<td>No main-push, PR, or <code>workflow_run</code> trigger. Rejects tags not matching <code>^20[0-9]{2}\.[0-9]+\.[0-9]+$</code>, checks out the tag and deploys that revision. No named Production environment on this deploy job.</td>
+</tr>
+</tbody></table>
+<p>Pinned source:</p>
+<ul>
+<li><a href="https://github.com/famlopezmuralles/FillRoute/blob/c4e2edcd0aabb0077385434b52cbdc801f864468/.github/workflows/staging-deploy.yml#L7-L30" rel="noopener noreferrer" target="_blank">Staging triggers/job, lines 7–30</a>.</li>
+<li><a href="https://github.com/famlopezmuralles/FillRoute/blob/c4e2edcd0aabb0077385434b52cbdc801f864468/.github/workflows/staging-deploy.yml#L82-L167" rel="noopener noreferrer" target="_blank">Staging deployment sequence, lines 82–167</a>; <a href="https://github.com/famlopezmuralles/FillRoute/blob/c4e2edcd0aabb0077385434b52cbdc801f864468/.github/workflows/staging-deploy.yml#L190-L201" rel="noopener noreferrer" target="_blank">post-deploy gate dependency, lines 190–201</a>.</li>
+<li><a href="https://github.com/famlopezmuralles/FillRoute/blob/c4e2edcd0aabb0077385434b52cbdc801f864468/.github/workflows/promote-production.yml#L12-L44" rel="noopener noreferrer" target="_blank">Promote triggers/inputs, lines 12–44</a>; <a href="https://github.com/famlopezmuralles/FillRoute/blob/c4e2edcd0aabb0077385434b52cbdc801f864468/.github/workflows/promote-production.yml#L67-L97" rel="noopener noreferrer" target="_blank">skip/preflight conditions, lines 67–97</a>; <a href="https://github.com/famlopezmuralles/FillRoute/blob/c4e2edcd0aabb0077385434b52cbdc801f864468/.github/workflows/promote-production.yml#L120-L154" rel="noopener noreferrer" target="_blank">tag/explicit deploy dispatch, lines 120–154</a>.</li>
+<li><a href="https://github.com/famlopezmuralles/FillRoute/blob/c4e2edcd0aabb0077385434b52cbdc801f864468/.github/workflows/deploy.yml#L10-L68" rel="noopener noreferrer" target="_blank">VPS triggers/job/tag validation, lines 10–68</a>.</li>
+<li><a href="https://api.github.com/repos/famlopezmuralles/FillRoute/actions/workflows" rel="noopener noreferrer" target="_blank">Live workflow inventory</a>.</li>
+</ul>
+<p>No inspected workflow declares <code>workflow_run</code>. A merge schedules ordinary main-push CI separately; CI success is not what starts staging. This backend-source change also matches SDK CI and sprint1-gate filters. Production Promote and Deploy share a serialization group, not a CI/approval dependency. If Promote were later enabled and a non-skipped release occurred, current main explicitly dispatches Deploy to VPS after creating the calendar tag; a <code>GITHUB_TOKEN</code> tag push alone does not supply that handoff.</p>
+<p>Scheduling does not guarantee success: runner/host/configuration/build/health prerequisites still apply. A direct qualifying tag push or manual Deploy to VPS can enter the active production workflow without first running Promote. No such action is authorized or performed here. These are backend workflow conclusions, not a blanket claim about all external deployment integrations.</p>
+<h2>Correlation with real runs</h2>
+<h3>Latest staging: deployment succeeded before the gate failed</h3>
+<p>Fresh retained staging history reports 53 runs. Latest:</p>
+<ul>
+<li>Run: <a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/36669212403" rel="noopener noreferrer" target="_blank">https://github.com/famlopezmuralles/FillRoute/actions/runs/36669212403</a></li>
+<li>Event/branch: <strong>push/main</strong>.</li>
+<li>Head: <code>c4e2edcd0aabb0077385434b52cbdc801f864468</code>.</li>
+<li>Created: <strong>2026-09-30T04:31:17Z</strong>; overall conclusion <strong>failure</strong>.</li>
+<li><a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/36669212403/job/109740382170" rel="noopener noreferrer" target="_blank">Deploy to Staging job</a>: <strong>success</strong>, 04:31:19–04:31:58 UTC. Source push, deployment and public-health steps succeeded.</li>
+<li><a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/36669212403/job/109740536912" rel="noopener noreferrer" target="_blank">Staging ship-gate job</a>: <strong>failure</strong>, 04:32:00–04:32:15 UTC, at <strong>Initialize containers</strong>; subsequent test steps skipped.</li>
+</ul>
+<p><strong>That later gate failure is not absence of staging deployment.</strong> This run already deployed staging. It did not certify the post-deployment gate, and no rollback is established by this evidence.</p>
+<h3>Successful historical automatic deployment</h3>
+<p><a href="https://github.com/famlopezmuralles/FillRoute/pull/183" rel="noopener noreferrer" target="_blank">https://github.com/famlopezmuralles/FillRoute/pull/183</a> merged at <strong>2026-09-23T16:07:59Z</strong> with SHA <code>a8d8292617d0443d1747ce15eddaf515e880c7eb</code>.</p>
+<p>Three seconds later, <a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/35886606212" rel="noopener noreferrer" target="_blank">https://github.com/famlopezmuralles/FillRoute/actions/runs/35886606212</a> started from <strong>push/main</strong> at that exact SHA; it completed <strong>success</strong> at 16:10:34 UTC. Both <a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/35886606212/job/107268230882" rel="noopener noreferrer" target="_blank">deployment</a> and <a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/35886606212/job/107268996970" rel="noopener noreferrer" target="_blank">post-deploy live staging gate</a> succeeded.</p>
+<p>This is a real <strong>merge → main push → automatic staging deployment</strong> proof, not a manually dispatched deployment and not a workflow triggered by completion of CI.</p>
+<h3>Production history is distinct</h3>
+<p>Fresh <a href="https://api.github.com/repos/famlopezmuralles/FillRoute/actions/workflows/239952524/runs?per_page=10" rel="noopener noreferrer" target="_blank">Deploy to VPS history</a> reports <strong><code>total_count:0</code></strong>, empty run list. There is no retained Actions deployment run for that backend production workflow; this does not exclude manual host activity or deleted history.</p>
+<p>Fresh Promote history has three successful <strong>schedule</strong> runs:</p>
+<table><thead><tr>
+<th>Run</th>
+<th>UTC creation</th>
+<th>Head SHA</th>
+</tr></thead><tbody>
+<tr>
+<td><a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/35005192536" rel="noopener noreferrer" target="_blank">https://github.com/famlopezmuralles/FillRoute/actions/runs/35005192536</a></td>
+<td>2026-09-15 18:04:31</td>
+<td><code>8318557a909be6ef78db962e06ca8cffec526f26</code></td>
+</tr>
+<tr>
+<td><a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/33539666832" rel="noopener noreferrer" target="_blank">https://github.com/famlopezmuralles/FillRoute/actions/runs/33539666832</a></td>
+<td>2026-09-01 17:45:46</td>
+<td><code>657cf81d189865ce77fbf14b2f8d60500aa64538</code></td>
+</tr>
+<tr>
+<td><a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/31890016650" rel="noopener noreferrer" target="_blank">https://github.com/famlopezmuralles/FillRoute/actions/runs/31890016650</a></td>
+<td>2026-08-15 14:28:45</td>
+<td><code>220606cad3757100445c7814ade6b832fb8179f0</code></td>
+</tr>
+</tbody></table>
+<p>The <a href="https://github.com/famlopezmuralles/FillRoute/actions/runs/35005192536/job/104503081533" rel="noopener noreferrer" target="_blank">latest historical promotion job</a> successfully created/pushed a release tag but contained no production-dispatch step. It predates the explicit dispatch now in current main. Successful promotion/tag creation is not a backend deployment; the separate VPS deployment history remains empty.</p>
+<h2>Automerge and authorization</h2>
+<p>Main-firstmate&#x27;s fresh repository API confirmation is <strong><code>allow_auto_merge:false</code></strong>; source endpoint: <a href="https://api.github.com/repos/famlopezmuralles/FillRoute" rel="noopener noreferrer" target="_blank">repository metadata</a>. This worker did not repeat that user-reported check. GitHub automerge is not enabled for this repository, but manual merge remains a separate operation.</p>
+<p>The security reservation is independent of CI: this task must stop at a ready, green pull request until the captain explicitly authorizes merge. A successful CI outcome is readiness evidence, not captain authorization. The historical staging gate failure likewise is not the reason for the reservation.</p>
+<h2>Scope and limits</h2>
+<p>Current-main workflow definitions, live enablement and run/job results were inspected with read-only operations. No merge, dispatch, deployment command, code/configuration change, order, mutating SSH, POST, or database access was performed. No secret values were read. No new validation run was started. The report was narrowed on instruction; no further Vercel, secret-permission, image, or SSH investigation was pursued during closeout.</p>
+<p>Final answer: <strong>a merge would initiate backend staging CD automatically; it would not initiate backend VPS production CD from the main push. Automerge is disabled, and this security fix still requires the captain&#x27;s explicit merge authorization—not a change to green CI. A manual no-deploy instruction does not suppress Actions after a merge.</strong></p>
+</body></html>
