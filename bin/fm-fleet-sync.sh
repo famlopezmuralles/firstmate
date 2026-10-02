@@ -24,7 +24,7 @@
 # killed mid-write - e.g. a timed-out bootstrap sync or a teardown process kill),
 # it is retried with a bounded wait and removed only when provably stale; see
 # fetch_with_packed_refs_lock_guard and the FM_FLEET_SYNC_PACKED_REFS_LOCK_* knobs.
-# Usage: fm-fleet-sync.sh [<project-dir-or-name>]
+# Usage: fm-fleet-sync.sh [--check-only] [<project-dir-or-name>]
 # The single-project form accepts either a path (absolute, or relative to the
 # caller's cwd) or a bare "<name>"/"projects/<name>" form, resolved against
 # this home's projects dir ($FM_HOME/projects, or $FM_PROJECTS_OVERRIDE).
@@ -32,6 +32,22 @@
 # falling back to an explicit path. Example: from anywhere,
 # `fm-fleet-sync.sh dotfiles-private` syncs just that one clone, same as
 # passing its full projects/dotfiles-private path.
+#
+# --check-only (used by fm-update-check-cron.sh) walks the exact same clone
+# enumeration and skip rules, and still fetches (read-only to the working
+# tree), but never prunes a gone branch, never re-attaches a detached HEAD,
+# and never fast-forwards: a clone that is clean and behind is reported as
+# "<label>: N commits behind <base>" instead of being synced. Every other
+# outcome (already current, STUCK, or a benign skip) is unchanged.
+#
+# The single-project form optionally takes a remote name and a branch name
+# after the project argument - "fm-fleet-sync.sh --check-only <path> [<remote>
+# [<branch>]]" - so a caller comparing a config/watched-tools.json git entry
+# (docs/configuration.md's "remote"/"branch" override fields) can honor a
+# non-"origin" remote or a non-default branch instead of this script silently
+# assuming "origin" and auto-detecting the default. The whole-fleet form never
+# takes these; every projects/ clone is still compared against its own
+# "origin" and its own auto-detected default branch.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,14 +79,22 @@ if ! [[ "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS" =~ ^([0-9]+([.][0-9]*)?|[
 fi
 
 usage() {
-  echo "usage: fm-fleet-sync.sh [<project-dir-or-name>]" >&2
+  echo "usage: fm-fleet-sync.sh [--check-only] [<project-dir-or-name> [<remote> [<branch>]]]" >&2
 }
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
   usage
   exit 0
 fi
-[ $# -le 1 ] || { usage; exit 1; }
+
+CHECK_ONLY=0
+if [ "${1:-}" = "--check-only" ]; then
+  CHECK_ONLY=1
+  shift
+fi
+[ $# -le 3 ] || { usage; exit 1; }
+REMOTE_OVERRIDE="${2:-}"
+BRANCH_OVERRIDE="${3:-}"
 
 project_label() {
   case "$PROJ" in
@@ -117,9 +141,13 @@ resolve_project_arg() {
 
 default_branch() {
   local ref branch
-  ref=$(git -C "$PROJ" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  if [ -n "$BRANCH_OVERRIDE" ]; then
+    echo "$BRANCH_OVERRIDE"
+    return 0
+  fi
+  ref=$(git -C "$PROJ" symbolic-ref --quiet --short "refs/remotes/$REMOTE/HEAD" 2>/dev/null || true)
   if [ -n "$ref" ]; then
-    echo "${ref#origin/}"
+    echo "${ref#"$REMOTE"/}"
     return 0
   fi
   for branch in main master; do
@@ -169,7 +197,7 @@ packed_refs_lock_path() {
 # a session-start refresh (which discards fleet-sync stderr) still surfaces it.
 fetch_with_packed_refs_lock_guard() {
   local rc attempt=0 lock lock_desc
-  FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+  FETCH_OUTPUT=$(git -C "$PROJ" fetch "$REMOTE" --prune --quiet 2>&1); rc=$?
   [ "$rc" -eq 0 ] && return 0
   is_packed_refs_lock_error "$FETCH_OUTPUT" || return "$rc"
 
@@ -179,7 +207,7 @@ fetch_with_packed_refs_lock_guard() {
     attempt=$(( attempt + 1 ))
     echo "$label: fetch blocked by packed-refs lock ($lock_desc); waiting ${FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS}s and retrying ($attempt/${FLEET_SYNC_PACKED_REFS_LOCK_RETRIES}) (owning process may be exiting)" >&2
     sleep "$FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS"
-    FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+    FETCH_OUTPUT=$(git -C "$PROJ" fetch "$REMOTE" --prune --quiet 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
       echo "$label: fetch succeeded on retry; packed-refs lock cleared on its own" >&2
       # One stdout summary so a session-start refresh (which discards fleet-sync
@@ -203,7 +231,7 @@ fetch_with_packed_refs_lock_guard() {
         return "$rc"
       fi
       echo "$label: removed provably-stale packed-refs lock $lock (age >= ${FLEET_SYNC_PACKED_REFS_LOCK_AGE_SECS}s, no live holder) and retrying fetch" >&2
-      FETCH_OUTPUT=$(git -C "$PROJ" fetch origin --prune --quiet 2>&1); rc=$?
+      FETCH_OUTPUT=$(git -C "$PROJ" fetch "$REMOTE" --prune --quiet 2>&1); rc=$?
       if [ "$rc" -eq 0 ]; then
         echo "$label: fetch succeeded after stale packed-refs lock cleanup" >&2
         echo "$label: recovered: removed a stale packed-refs lock (no live holder)"
@@ -330,8 +358,8 @@ sync_project() {
     echo "$label: skipped: local-only project"
     return 0
   fi
-  if ! git -C "$PROJ" remote get-url origin >/dev/null 2>&1; then
-    echo "$label: skipped: no origin remote"
+  if ! git -C "$PROJ" remote get-url "$REMOTE" >/dev/null 2>&1; then
+    echo "$label: skipped: no $REMOTE remote"
     return 0
   fi
 
@@ -344,13 +372,13 @@ sync_project() {
     return 0
   fi
 
-  prune_gone_branches || true
+  [ "$CHECK_ONLY" = 1 ] || prune_gone_branches || true
 
   DEFAULT=$(default_branch) || {
     echo "$label: skipped: cannot determine default branch"
     return 0
   }
-  BASE="origin/$DEFAULT"
+  BASE="$REMOTE/$DEFAULT"
   if ! git -C "$PROJ" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null; then
     echo "$label: skipped: $BASE does not exist"
     return 0
@@ -370,7 +398,7 @@ sync_project() {
     # non-default named branch, a detached HEAD with unique commits, a dirty tree,
     # or <default> already checked out elsewhere - may hold real work, so it is
     # reported loudly and left untouched.
-    if [ -z "$cur" ] && [ "$dirty" = no ] \
+    if [ "$CHECK_ONLY" = 0 ] && [ -z "$cur" ] && [ "$dirty" = no ] \
         && git -C "$PROJ" merge-base --is-ancestor HEAD "$BASE" 2>/dev/null \
         && ! default_checked_out_elsewhere \
         && local_default_safe_for_recovery; then
@@ -416,6 +444,12 @@ sync_project() {
     return 0
   fi
 
+  if [ "$CHECK_ONLY" = 1 ]; then
+    count=$(git -C "$PROJ" rev-list --count "$DEFAULT..$BASE" 2>/dev/null) || count="?"
+    echo "$label: $count commits behind $BASE"
+    return 0
+  fi
+
   before=$(git -C "$PROJ" rev-parse --short "$DEFAULT") || {
     echo "$label: skipped: cannot read local $DEFAULT"
     return 0
@@ -440,11 +474,14 @@ sync_project() {
   return 0
 }
 
-if [ $# -eq 1 ]; then
+if [ $# -ge 1 ]; then
+  REMOTE="${REMOTE_OVERRIDE:-origin}"
   sync_project "$(resolve_project_arg "$1")"
   exit 0
 fi
 
+REMOTE=origin
+BRANCH_OVERRIDE=""
 [ -d "$PROJECTS" ] || exit 0
 for proj in "$PROJECTS"/*; do
   [ -e "$proj" ] || continue
