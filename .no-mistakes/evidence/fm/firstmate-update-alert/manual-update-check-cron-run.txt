@@ -1,0 +1,29 @@
+Manual end-to-end drive of bin/fm-update-check-cron.sh against a disposable
+primary home with:
+  - projects/proj1: a registered productive clone pushed 1 commit ahead of
+    its local checkout's origin/main
+  - a config/watched-tools.json git entry ("custom-tool") configured with a
+    non-default remote name ("upstream"), also 1 commit behind on that remote
+
+=== run fm-update-check-cron.sh ===
+queued 1790958877-lhGgDb
+  update-check: the following repositories are behind their origin (home: /tmp/fm-manual-check-rvaSwI/
+  firstmate will pick this up at its next check.
+
+=== inbox note written ===
+id=1790958877-lhGgDb
+at=2026-10-02T16:34:37Z
+source=text
+--
+update-check: the following repositories are behind their origin (home: /tmp/fm-manual-check-rvaSwI/home)
+
+custom-tool: 1 commits behind upstream/main
+proj1: 1 commits behind origin/main
+
+=== HEADs unchanged (never fast-forward) ===
+proj1: before=2e73c84d686bddacf915f5de74f91b0084c71e85 after=2e73c84d686bddacf915f5de74f91b0084c71e85 same=yes
+tool: before=2e73c84d686bddacf915f5de74f91b0084c71e85 after=2e73c84d686bddacf915f5de74f91b0084c71e85 same=yes
+
+Confirms: single consolidated inbox note, projects/ clone and watched-tool
+remote-override both reported with correct behind-counts and correct remote
+label, clones left untouched (no fast-forward/stash/commit/discard).
