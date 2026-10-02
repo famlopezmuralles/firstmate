@@ -305,6 +305,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/casa-vm-pool-breakglass.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/cd-guard.md",
       "audience": "maintainer-architecture"
     },
