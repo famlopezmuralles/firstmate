@@ -92,6 +92,42 @@ run_cron() {
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-prod-ff-cron.sh"
 }
 
+# --- packed-refs.lock fixtures (self-healed fetch retry noise on stderr) ----
+#
+# fm-fleet-sync.sh's packed-refs.lock retry guard prints its interim
+# diagnostics ("fetch blocked by packed-refs lock ...", "fetch succeeded on
+# retry; packed-refs lock cleared on its own") to stderr before the benign
+# "recovered: ... synced" outcome line on stdout. This cron script must only
+# classify fleet-sync's stdout, never stderr, or that stderr noise reads as an
+# alert-worthy outcome for a run that needed no captain attention.
+plant_packed_refs_lock() { : > "$1/.git/packed-refs.lock"; }
+
+# git shim: fail the FIRST `fetch` with the packed-refs.lock signature and drop
+# the lock (simulating the dying ref-rewrite finishing), then delegate every
+# later call - including the retried fetch - to the real git.
+git_transient_packed_refs_lock() {
+  cat > "$1/git" <<'SH'
+#!/usr/bin/env bash
+real=${REAL_GIT_FOR_TEST:?}
+dir=; is_fetch=0
+for a in "$@"; do [ "$a" = fetch ] && is_fetch=1; done
+prev=
+for a in "$@"; do [ "$prev" = -C ] && dir=$a; prev=$a; done
+if [ "$is_fetch" = 1 ]; then
+  n=$(cat "${GIT_FETCH_COUNTER:?}" 2>/dev/null || echo 0); n=$(( n + 1 ))
+  printf '%s\n' "$n" > "$GIT_FETCH_COUNTER"
+  if [ "$n" -eq 1 ]; then
+    lock="$dir/.git/packed-refs.lock"
+    echo "error: could not delete reference refs/remotes/origin/feature: Unable to create '$lock': File exists." >&2
+    rm -f "$lock"
+    exit 1
+  fi
+fi
+exec "$real" "$@"
+SH
+  chmod +x "$1/git"
+}
+
 note_bodies() {
   local home=$1
   [ -d "$home/state/inbox" ] || return 0
@@ -195,6 +231,32 @@ test_local_only_and_no_origin_stay_silent() {
 
   [ "$(note_count "$home")" -eq 0 ] || fail "benign skips (local-only, no-origin) must never alert"
   pass "local-only and no-origin clones are silently skipped, never alerted"
+}
+
+test_self_healed_packed_refs_lock_does_not_alert() {
+  local home clone fakebin realgit counter
+
+  home=$(new_primary_home)
+  clone=$(build_pair "$home" mu)
+  advance_origin "$home" mu C1
+  plant_packed_refs_lock "$clone"
+
+  fakebin="$home/fakebin"
+  mkdir -p "$fakebin"
+  git_transient_packed_refs_lock "$fakebin"
+  realgit=$(command -v git)
+  counter="$home/git-fetch-count"
+  : > "$counter"
+
+  PATH="$fakebin:$PATH" REAL_GIT_FOR_TEST="$realgit" GIT_FETCH_COUNTER="$counter" \
+  FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRIES=3 FM_FLEET_SYNC_PACKED_REFS_LOCK_RETRY_WAIT_SECS=0 \
+    run_cron "$home" >/dev/null
+
+  [ "$(note_count "$home")" -eq 0 ] \
+    || fail "a fully self-healed packed-refs.lock retry must not alert (stderr retry noise misread as alert-worthy)"
+  [ "$(git -C "$clone" rev-parse HEAD)" = "$(git -C "$clone" rev-parse origin/main)" ] \
+    || fail "clone must still be fast-forwarded after the self-healed retry"
+  pass "a self-healed packed-refs.lock retry (stderr diagnostics, benign stdout outcome) raises no alert"
 }
 
 test_restart_and_verify_only_after_real_fast_forward() {
@@ -331,6 +393,7 @@ test_install_refuses_in_secondmate_home() {
 }
 
 test_clean_sync_no_alert
+test_self_healed_packed_refs_lock_does_not_alert
 test_dirty_copy_alerts_with_detail
 test_fetch_failure_alerts
 test_local_only_and_no_origin_stay_silent
