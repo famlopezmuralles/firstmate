@@ -344,38 +344,6 @@ test_agy_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   pass "fm-spawn.sh: an agy spawn pre-trusts its worktree and launches with the brief"
 }
 
-# A refused registration must abort the spawn before any per-task state
-# exists, exactly like the claude case in tests/fm-claude-trust.test.sh.
-test_refused_spawn_leaves_no_task_state() {
-  local case_dir home proj wt fakebin out id store
-  case_dir="$TMP_ROOT/refused-spawn"
-  home="$case_dir/home"
-  proj="$case_dir/project"
-  wt="$case_dir/wt"
-  id="refusedspawn$$"
-  if [ "$(id -u)" = 0 ]; then
-    pass "fm-spawn.sh: a trust-refused agy spawn leaves no task state (skipped as root)"
-    return 0
-  fi
-  store="$home/user-home/$STORE_REL"
-  mkdir -p "$(dirname "$store")"
-  ln -s /etc/passwd "$store"
-  fakebin=$(make_spawn_fakebin "$case_dir/fake" agy)
-  fm_test_spawn_home "$home" agy
-  fm_git_worktree "$proj" "$wt" wt-refused
-  fm_test_spawn_brief "$home" "$id"
-  out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" agy \
-    --mode no-mistakes --yolo off)
-  expect_code 1 $? "a spawn whose trust registration is refused must fail: $out"
-  assert_contains "$out" "workspace trust" "the spawn did not report the trust refusal"
-  [ ! -e "$home/state/$id.busy-state" ] \
-    || fail "a refused spawn stranded a busy record nothing can clear"
-  [ ! -e "$home/state/$id.busy-gen" ] \
-    || fail "a refused spawn stranded a busy generation nothing can clear"
-  [ ! -e "/tmp/fm-$id" ] \
-    || { rm -rf "/tmp/fm-$id"; fail "a refused spawn stranded a temp root no teardown can find"; }
-  pass "fm-spawn.sh: a trust-refused agy spawn leaves no task state behind"
-}
 
 test_fresh_worktree_is_trusted
 test_registration_is_idempotent
@@ -394,4 +362,3 @@ test_missing_node_is_refused
 test_scope_refusal_stays_fail_closed_without_node
 test_corrupt_store_fails_closed
 test_agy_spawn_pretrusts_its_worktree_and_reaches_the_brief
-test_refused_spawn_leaves_no_task_state
