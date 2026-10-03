@@ -492,17 +492,33 @@ test_agy_hooks_stale_incarnation_harmless() {
 }
 
 test_raw_agy_launch_has_no_semantic_wiring() {
-  local rec id=busy-agy-raw out state
+  local rec id=busy-agy-raw out state real
   rec=$(make_spawn_case agy-raw agy "$id")
   read_case_record "$rec"
-  out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" 'agy --debug')
+  # Raw launch arms no busy record, so the post-launch gate's only proof is
+  # the rendered busy row. The shared spawn stub captures an empty pane.
+  real="$FAKEBIN_DIR/tmux.real"
+  mv "$FAKEBIN_DIR/tmux" "$real"
+  cat > "$FAKEBIN_DIR/tmux" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = capture-pane ]; then
+  printf '%s\n' 'esc to cancel'
+  exit 0
+fi
+exec $(printf '%q' "$real") "\$@"
+SH
+  chmod +x "$FAKEBIN_DIR/tmux"
+  out=$(FM_AGY_POLL_INTERVAL=0 FM_AGY_READY_POLLS=4 \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id" "$PROJ_DIR" 'agy --debug')
   expect_code 0 $? "raw agy spawn should succeed: $out"
   state="$HOME_DIR/state"
   assert_absent "$state/$id.busy-gen" "raw agy launch must not arm a busy generation"
   assert_absent "$state/$id.agy-turnend-token" "raw agy launch must not write a registry token"
   assert_absent "$WT_DIR/.fm-agy-turnend" "raw agy launch must not write a worktree pointer"
-  out=$(classify agy "$id" "$state")
-  [ "$out" = "unknown missing" ] || fail "raw agy launch must classify unknown, got '$out'"
+  # No record and a quiet pane: the regex fallback reports unknown, which is
+  # what proves the launch did not seed a semantic busy state.
+  out=$(fm_busy_classify tmux fake:w agy "$id" "$state" 'idle >')
+  [ "$out" = "unknown agy-regex" ] || fail "raw agy launch must classify unknown through the rendered fallback, got '$out'"
   pass "raw agy launch remains unwired and classifies unknown"
 }
 
