@@ -4392,13 +4392,13 @@ claude*)
     exit 1
   fi
   ;;
-agy)
+agy*)
   if [ "$KIND" != secondmate ]; then
-    if "$FM_ROOT/bin/fm-agy-trust.sh" "$WT" "$PROJ_ABS" >/dev/null; then
-      AGY_TRUST_PREREGISTERED=1
-    else
-      echo "warning: could not pre-register agy workspace trust for $WT; the launch will answer the folder-trust dialog in window $T instead" >&2
+    if ! "$FM_ROOT/bin/fm-agy-trust.sh" "$WT" "$PROJ_ABS" >/dev/null; then
+      echo "error: could not pre-register agy workspace trust for $WT; refusing to launch an agy worker that would sit at the trust dialog; inspect window $T" >&2
+      exit 1
     fi
+    AGY_TRUST_PREREGISTERED=1
   fi
   ;;
 esac
