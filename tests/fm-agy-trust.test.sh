@@ -337,13 +337,48 @@ test_agy_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   assert_trusted "$home/user-home" "$wt" \
     "the agy spawn did not pre-register trust for its worktree"
   assert_present "$launch_log" "the agy spawn sent no launch command"
-  assert_grep '--dangerously-skip-permissions' "$launch_log" \
+  assert_grep "agy' --prompt-interactive " "$launch_log" \
     "the launch command was not the agy worker launch"
+  assert_grep ' --dangerously-skip-permissions' "$launch_log" \
+    "the agy worker launch did not skip permission prompts"
   assert_grep "$home/data/trustspawn/launch-brief.md" "$launch_log" \
     "the launch command did not carry the brief the worker must read"
   pass "fm-spawn.sh: an agy spawn pre-trusts its worktree and launches with the brief"
 }
 
+# A refused registration must not launch an unattended agy worker: the spawn
+# still fails at the launch-confirmation gate, records that failure for
+# teardown, and leaves no busy state behind.
+test_refused_spawn_leaves_no_task_state() {
+  local case_dir home proj wt fakebin out id store
+  case_dir="$TMP_ROOT/refused-spawn"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  id="refusedspawn$$"
+  if [ "$(id -u)" = 0 ]; then
+    pass "fm-spawn.sh: a trust-refused agy spawn leaves no task state (skipped as root)"
+    return 0
+  fi
+  store="$home/user-home/$STORE_REL"
+  mkdir -p "$(dirname "$store")"
+  ln -s /etc/passwd "$store"
+  fakebin=$(make_spawn_fakebin "$case_dir/fake" agy)
+  fm_test_spawn_home "$home" agy
+  fm_git_worktree "$proj" "$wt" wt-refused
+  fm_test_spawn_brief "$home" "$id"
+  out=$(fm_test_run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" agy \
+    --mode no-mistakes --yolo off)
+  expect_code 1 $? "a spawn whose trust registration is refused must fail: $out"
+  assert_contains "$out" "workspace trust" "the spawn did not report the trust refusal"
+  [ ! -e "$home/state/$id.busy-state" ] \
+    || fail "a refused spawn stranded a busy record nothing can clear"
+  [ ! -e "$home/state/$id.busy-gen" ] \
+    || fail "a refused spawn stranded a busy generation nothing can clear"
+  assert_grep 'failed [at=' "$home/state/$id.status" \
+    "a refused spawn did not record its failure for teardown to find"
+  pass "fm-spawn.sh: a trust-refused agy spawn fails and leaves no busy state behind"
+}
 
 test_fresh_worktree_is_trusted
 test_registration_is_idempotent
@@ -362,3 +397,4 @@ test_missing_node_is_refused
 test_scope_refusal_stays_fail_closed_without_node
 test_corrupt_store_fails_closed
 test_agy_spawn_pretrusts_its_worktree_and_reaches_the_brief
+test_refused_spawn_leaves_no_task_state
