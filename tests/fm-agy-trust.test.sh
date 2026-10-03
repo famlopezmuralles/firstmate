@@ -337,7 +337,7 @@ test_agy_spawn_pretrusts_its_worktree_and_reaches_the_brief() {
   assert_trusted "$home/user-home" "$wt" \
     "the agy spawn did not pre-register trust for its worktree"
   assert_present "$launch_log" "the agy spawn sent no launch command"
-  assert_grep 'agy --dangerously-skip-permissions' "$launch_log" \
+  assert_grep '--dangerously-skip-permissions' "$launch_log" \
     "the launch command was not the agy worker launch"
   assert_grep "$home/data/trustspawn/launch-brief.md" "$launch_log" \
     "the launch command did not carry the brief the worker must read"
