@@ -1,0 +1,25 @@
+$ fm-agy-trust.sh <linked worktree> <project>
+trusted: /tmp/agyv2.GWyA/wt1
+rc=0
+{
+  "theme": "dark",
+  "trustedWorkspaces": [
+    "/x/other",
+    "/tmp/agyv2.GWyA/wt1"
+  ]
+}
+
+$ fm-agy-trust.sh <primary checkout> <project>
+error: refusing to pre-register agy trust: '/tmp/agyv2.GWyA/proj' is a primary checkout, not an isolated worktree
+rc=1
+$ fm-agy-trust.sh <HOME> <project>
+error: refusing to pre-register agy trust: '/tmp/agyv2.GWyA/home' is the home directory, not a task worktree
+rc=1
+$ fm-agy-trust.sh <plain dir> <project>
+error: refusing to pre-register agy trust: '/tmp/agyv2.GWyA/plain' is not inside a git repository
+rc=1
+$ corrupt store, fm-agy-trust.sh <linked worktree> <project>
+error: Expected property name or '}' in JSON at position 1 (line 1 column 2)
+error: refusing to pre-register agy trust: could not record trust for '/tmp/agyv2.GWyA/wt1' in '/tmp/agyv2.GWyA/home/.gemini/antigravity-cli/settings.json'
+rc=1
+store after: {not json
