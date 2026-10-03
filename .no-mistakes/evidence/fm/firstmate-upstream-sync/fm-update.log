@@ -1,0 +1,18 @@
+ok - T1 main + secondmate fast-forward (single-parent), reread + restart signalled
+ok - T3 a non-instruction advance still restarts the live secondmate
+ok - T3b a bin/-only advance restarts the secondmate
+ok - T3c an unverifiable secondmate receives the fallback nudge
+ok - T3d an already-stopped secondmate is left to startup recovery
+ok - T3e a legacy remote advance still restarts the live remote mate
+ok - T4 dirty secondmate skipped, local edit preserved
+ok - T5 diverged secondmate is preserved and durably actionable
+ok - T5b squash-merged divergence heals and rejoins live convergence
+ok - T6 an already-current live secondmate is still restarted
+ok - T6b an already-current mate with an unprovable runtime is steered, not claimed as reloaded
+ok - T7 registry backstop resolves, dedups meta+registry, excludes the firstmate repo
+ok - T9 firstmate off its default branch is skipped, not forced
+ok - T10 firstmate detached HEAD is skipped
+ok - T11 unsafe secondmate home is not fast-forwarded
+ok - T12 a self-update rebinds a locally armed watch on the primary
+# all fm-update tests passed
+EXIT 0

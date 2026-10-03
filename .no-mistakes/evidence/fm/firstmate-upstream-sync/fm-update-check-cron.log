@@ -1,0 +1,13 @@
+ok - a run with every clone already current writes no inbox alert
+ok - a behind clone raises one inbox alert and is left untouched
+ok - a dirty copy raises one inbox alert naming the stuck state
+ok - local-only and no-origin clones are silently skipped, never alerted
+ok - multiple behind clones are consolidated into one inbox note
+ok - a git-backed watched-tools.json entry is checked and relabeled with its configured name
+ok - a watched-tools.json git.remote override is honored instead of being silently skipped
+ok - a watched-tools.json git.branch override is honored instead of comparing against the wrong branch
+ok - a git-backed watched-tools.json entry that is also a registered projects/ clone is reported exactly once
+ok - fm-update-check-cron.sh refuses outright in a secondmate home
+ok - install/status/uninstall are idempotent and scoped to this home's own entry
+ok - fm-update-check-cron-install.sh refuses outright in a secondmate home
+EXIT 0
