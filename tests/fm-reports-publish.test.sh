@@ -360,6 +360,48 @@ test_persistence_when_worktree_pruned() {
   pass "existing published reports are preserved across worktree prunes"
 }
 
+test_report_project_reassignment_updates_existing_identity() {
+  local root
+  root=$(fm_test_tmproot fm-reports-project-move)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "first publish failed: $(cat "$root/stderr")"
+
+  snapshot_stub "$root/main/bin/fm-fleet-snapshot.sh" '[
+    {"id":"task-good","structured":true,"title":"Good report task","repo":"new-repo","pr_url":"https://github.com/example/demo/pull/1","state":"done"},
+    {"id":"task-super","structured":true,"title":"Superseded task","repo":"demo-repo","pr_url":"","state":"done"},
+    {"id":"task-xss","structured":true,"title":"XSS task","repo":"demo-repo","pr_url":"","state":"in_flight"},
+    {"id":"task-orphan","structured":true,"title":"Orphan task","repo":"..","pr_url":"","state":"done"}
+  ]'
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "second publish failed: $(cat "$root/stderr")"
+
+  python3 - "$root/publish/catalog.json" <<'PY'
+import json
+import sys
+
+reports = json.load(open(sys.argv[1], encoding="utf-8"))["reports"]
+matches = [report for report in reports if report["task_id"] == "task-good"]
+if len(matches) != 1:
+    raise SystemExit(f"expected one catalog record after project reassignment, found {len(matches)}")
+if matches[0]["project"] != "new-repo" or matches[0]["html_path"] != "new-repo/task-good.html":
+    raise SystemExit(f"catalog retained the old project assignment: {matches[0]}")
+PY
+  [ ! -e "$root/publish/demo-repo/task-good.html" ] \
+    || fail "old project report page should be removed"
+  [ -f "$root/publish/new-repo/task-good.html" ] \
+    || fail "report page should move to its reassigned project"
+  assert_not_contains "$(cat "$root/publish/demo-repo/index.html")" 'Good report task' \
+    "old project index must no longer show the moved report"
+  assert_contains "$(cat "$root/publish/new-repo/index.html")" 'Good report task' \
+    "new project index must show the moved report"
+  local committed_paths
+  committed_paths=$(git -C "$root/publish" ls-tree -r --name-only HEAD)
+  assert_not_contains "$committed_paths" 'demo-repo/task-good.html' \
+    "publish commit must remove the old report path"
+  assert_contains "$committed_paths" 'new-repo/task-good.html' \
+    "publish commit must include the reassigned report path"
+  pass "project reassignment updates the existing report identity and published paths"
+}
+
 test_git_repository_initialized_and_committed() {
   local root
   root=$(fm_test_tmproot fm-reports-git)
@@ -521,6 +563,7 @@ test_remote_report_provenance
 test_unreachable_remote_is_disclosed_not_silently_empty
 test_unknown_project_falls_back_to_general
 test_persistence_when_worktree_pruned
+test_report_project_reassignment_updates_existing_identity
 test_git_repository_initialized_and_committed
 test_refresh_commits_only_when_reports_change
 test_provenance_carries_intent_and_hides_ephemeral_paths

@@ -327,6 +327,9 @@ do_publish() {
     while IFS= read -r owned_path; do
       [ -n "$owned_path" ] && owned_paths+=("$owned_path")
     done < <(jq -r '.reports[]?.html_path | select(type == "string") | select(test("^[A-Za-z0-9._/-]+\\.html$")) | select((split("/") | all(. != "" and . != "." and . != "..")))' "$PUBLISH_ROOT/catalog.json")
+    while IFS= read -r owned_path; do
+      [ -n "$owned_path" ] && owned_paths+=("$owned_path")
+    done < <(jq -r '.reports[]?.project | select(type == "string") | select(test("^[A-Za-z0-9._-]+$")) | select(. != "." and . != "..") | . + "/index.html"' "$PUBLISH_ROOT/catalog.json")
   fi
   if [ ! -f "$PUBLISH_ROOT/.gitignore" ]; then
     cat > "$PUBLISH_ROOT/.gitignore" <<'EOF'

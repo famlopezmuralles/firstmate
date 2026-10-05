@@ -457,7 +457,8 @@ def main() -> int:
         return 1
 
     skipped: list[str] = []
-    persisted_reports: dict[tuple[str, str, str, str], dict] = {}
+    persisted_reports: dict[tuple[str, str, str], dict] = {}
+    old_projects: set[str] = set()
 
     os.makedirs(publish_root, exist_ok=True)
 
@@ -484,7 +485,11 @@ def main() -> int:
                     r["home_id"] = home_id
                     r["stem"] = stem
                     r["project"] = proj
-                    persisted_reports[(proj, task_id, stem, home_id)] = r
+                    old_projects.add(proj)
+                    report_key = (task_id, stem, home_id)
+                    prior_paths = persisted_reports.get(report_key, {}).get("_source_paths", [])
+                    r["_source_paths"] = [*prior_paths, html_path]
+                    persisted_reports[report_key] = r
         except Exception as exc:
             print(f"fm-reports-render: warning: could not load existing catalog.json: {exc}", file=sys.stderr)
 
@@ -542,7 +547,7 @@ def main() -> int:
             if backlog_state:
                 provenance.append(("Backlog state", html.escape(backlog_state)))
 
-            report_key = (proj_slug, task_id, stem, home_id)
+            report_key = (task_id, stem, home_id)
             prior_report = persisted_reports.get(report_key, {})
             current_report = {
                 "title": title,
@@ -559,16 +564,17 @@ def main() -> int:
                 "thinking_effort": effort,
                 "_page_html": report_page_html(title, proj_slug, provenance, body_html, historical),
             }
-            for field in ("_source_path", "_source_html"):
+            for field in ("_source_paths", "_source_html"):
                 if field in prior_report:
                     current_report[field] = prior_report[field]
             persisted_reports[report_key] = current_report
 
     home_ids_by_task: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
-    for proj, task_id, _stem, home_id in persisted_reports:
-        home_ids_by_task[(proj, task_id)].add(home_id)
+    for report in persisted_reports.values():
+        home_ids_by_task[(report["project"], report["task_id"])].add(report["home_id"])
 
-    for (proj, task_id, stem, home_id), report in persisted_reports.items():
+    for (task_id, stem, home_id), report in persisted_reports.items():
+        proj = report["project"]
         filename = task_id
         if stem != "report":
             filename += f"-{stem}"
@@ -576,15 +582,19 @@ def main() -> int:
             filename += f"--{home_id}"
         rel_html_path = f"{proj}/{filename}.html"
         report["html_path"] = rel_html_path
-        old_path = report.pop("_source_path", None)
+        old_paths = report.pop("_source_paths", [])
         page = report.pop("_page_html", None)
         if page is None:
-            page = migrate_page_links(report.pop("_source_html"), old_path or "")
+            source_path = old_paths[-1] if old_paths else ""
+            page = migrate_page_links(report.pop("_source_html"), source_path)
         else:
             report.pop("_source_html", None)
         write_file(os.path.join(publish_root, rel_html_path), page)
-        if old_path and old_path != rel_html_path:
-            os.unlink(os.path.join(publish_root, old_path))
+        for old_path in old_paths:
+            if old_path != rel_html_path:
+                old_full_path = os.path.join(publish_root, old_path)
+                if os.path.isfile(old_full_path):
+                    os.unlink(old_full_path)
 
     all_reports = sorted(
         persisted_reports.values(),
@@ -600,6 +610,10 @@ def main() -> int:
     for proj_slug, proj_reports in by_project.items():
         proj_index_path = os.path.join(publish_root, proj_slug, "index.html")
         write_file(proj_index_path, project_index_html(proj_slug, proj_reports))
+    for proj_slug in old_projects - by_project.keys():
+        old_index_path = os.path.join(publish_root, proj_slug, "index.html")
+        if os.path.isfile(old_index_path):
+            os.unlink(old_index_path)
 
     # Write root catalog.json
     write_file(
