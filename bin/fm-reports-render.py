@@ -54,7 +54,7 @@ def normalize_project_slug(raw_project: str | None) -> str:
     if not raw_project:
         return "general"
     p = raw_project.strip().split("/")[-1].lower()
-    if p and SAFE_ID_RE.match(p):
+    if p not in {".", ".."} and SAFE_ID_RE.match(p):
         return p
     return "general"
 

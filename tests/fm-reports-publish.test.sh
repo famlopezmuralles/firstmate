@@ -33,19 +33,22 @@ make_fixture() {
   local root=$1 main=$1/main second=$1/second
 
   mkdir -p "$main/data/task-good" "$main/data/task-super" "$main/data/task-xss" \
-    "$main/data/task-link" "$main/data/task-orphan" "$second/data/task-remote-sib"
+    "$main/data/task-link" "$main/data/task-orphan" "$main/state" \
+    "$second/data/task-remote-sib" "$second/state"
 
   snapshot_stub "$main/bin/fm-fleet-snapshot.sh" '[
     {"id":"task-good","structured":true,"title":"Good report task","repo":"demo-repo","pr_url":"https://github.com/example/demo/pull/1","state":"done"},
     {"id":"task-super","structured":true,"title":"Superseded task","repo":"demo-repo","pr_url":"","state":"done"},
     {"id":"task-xss","structured":true,"title":"XSS task","repo":"demo-repo","pr_url":"","state":"in_flight"},
-    {"id":"task-orphan","structured":true,"title":"Orphan task","repo":"","pr_url":"","state":"done"}
+    {"id":"task-orphan","structured":true,"title":"Orphan task","repo":"..","pr_url":"","state":"done"}
   ]'
   snapshot_stub "$second/bin/fm-fleet-snapshot.sh" '[
     {"id":"task-remote-sib","structured":true,"title":"Sibling home task","repo":"other-repo","pr_url":"","state":"done"}
   ]'
 
   printf '# Good report\n\nHello world.\n' > "$main/data/task-good/report.md"
+  printf 'model=gpt-6-sol\neffort=high\n' > "$main/state/task-good.meta"
+  printf 'model=claude-sonnet\neffort=medium\n' > "$second/state/task-remote-sib.meta"
   for junk in brief.md launch-brief.md decision.md review-decision.md \
       ship-instructions.md task-note.md intake.md brief-v2.md steer-x.md; do
     printf 'SHOULD_NOT_APPEAR_%s\n' "$junk" > "$main/data/task-good/$junk"
@@ -93,12 +96,20 @@ test_report_candidate_included_with_backlog_context() {
     "task-good's project should come from backlog context, not be invented"
   assert_contains "$(catalog_json "$root")" 'pull/1' \
     "task-good's linked PR should come from backlog context"
+  assert_contains "$(catalog_json "$root")" '"model": "gpt-6-sol"' \
+    "task model should come from state metadata"
+  assert_contains "$(catalog_json "$root")" '"thinking_effort": "high"' \
+    "task effort should come from state metadata"
   assert_contains "$(catalog_json "$root")" '"html_path": "demo-repo/task-good/report.html"' \
     "task-good should be published under demo-repo"
   [ -f "$root/publish/demo-repo/task-good/report.html" ] \
     || fail "task-good/report.html should be written under demo-repo"
   [ -f "$root/publish/demo-repo/index.html" ] \
     || fail "demo-repo/index.html project index should be generated"
+  assert_contains "$(cat "$root/publish/demo-repo/task-good/report.html")" 'Model used</dt><dd>gpt-6-sol' \
+    "report provenance should include its model"
+  assert_contains "$(cat "$root/publish/demo-repo/index.html")" 'gpt-6-sol' \
+    "project index should include model provenance"
   [ -f "$root/publish/index.html" ] \
     || fail "root index.html should be generated"
   local md_count
@@ -236,6 +247,7 @@ test_unknown_project_falls_back_to_general() {
 
   [ -f "$root/publish/general/task-orphan/report.html" ] \
     || fail "orphan task should be published under general"
+  [ ! -e "$root/task-orphan" ] || fail "a dot project slug must not escape the publish root"
   [ -f "$root/publish/general/index.html" ] \
     || fail "general project index should be generated"
   assert_contains "$(catalog_json "$root")" '"project": "general"' \

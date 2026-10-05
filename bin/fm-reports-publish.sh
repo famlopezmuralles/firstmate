@@ -131,17 +131,24 @@ captain_intent() {  # <brief-path>
   awk '/^## Captain.s intent/ { inside = 1; next } /^## |^# / { inside = 0 } inside' "$1"
 }
 
-report_entry_json() {  # <task_id> <filename> <content_path> <title> <project> <pr_url> <state> <mtime> <historical> <intent>
+meta_value() {  # <meta-file> <key>
+  [ -f "$1" ] || return 0
+  awk -F= -v key="$2" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$1"
+}
+
+report_entry_json() {  # <task_id> <filename> <content_path> <title> <project> <pr_url> <state> <mtime> <historical> <intent> <model> <effort>
   jq -n \
     --arg task_id "$1" --arg filename "$2" --arg content_path "$3" \
     --arg title "$4" --arg project "$5" --arg pr_url "$6" --arg state "$7" --arg mtime "$8" \
-    --argjson historical "$9" --arg intent "${10}" \
+    --argjson historical "$9" --arg intent "${10}" --arg model "${11}" --arg effort "${12}" \
     '{task_id:$task_id,filename:$filename,content_path:$content_path,
       title:(if $title == "" then null else $title end),
       project:(if $project == "" then null else $project end),
       pr_url:(if $pr_url == "" then null else $pr_url end),
       backlog_state:(if $state == "" then null else $state end),
       intent:(if $intent == "" then null else $intent end),
+      model:(if $model == "" or $model == "-" then null else $model end),
+      thinking_effort:(if $effort == "" or $effort == "-" then null else $effort end),
       mtime:$mtime,historical:$historical}'
 }
 
@@ -170,7 +177,7 @@ discover_local_home() {  # <id> <label> <home_path>
     printf '{}\n' > "$snapshot_json"
   fi
 
-  local data_dir="$home_path/data" task_dir task_id file base stem title project pr_url state mtime historical
+  local data_dir="$home_path/data" task_dir task_id file base stem title project pr_url state mtime historical model effort
   [ -d "$data_dir" ] || { note_unavailable "$label" "data directory not found: $data_dir"; return 0; }
 
   while IFS= read -r file; do
@@ -185,8 +192,10 @@ discover_local_home() {  # <id> <label> <home_path>
     historical=false
     is_historical_name "$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]')" && historical=true
     IFS=$'\x1f' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\x1f\x1f\x1f\n')
+    model=$(meta_value "$home_path/state/$task_id.meta" model)
+    effort=$(meta_value "$home_path/state/$task_id.meta" effort)
     report_entry_json "$task_id" "$base" "$file" "$title" "$project" "$pr_url" "$state" "$mtime" "$historical" \
-      "$(captain_intent "$task_dir/brief.md")" >> "$reports_file"
+      "$(captain_intent "$task_dir/brief.md")" "$model" "$effort" >> "$reports_file"
   done < <(
     find "$data_dir" -mindepth 2 -maxdepth 2 -type f -name '*.md' \
       -not -path "$data_dir/handoff/*" -not -path "$data_dir/remote-secondmates/*" 2>/dev/null | sort
@@ -226,7 +235,7 @@ discover_remote_home() {  # <id> <label>
     return 0
   fi
 
-  local task_id base stem title project pr_url state rc2
+  local task_id base stem title project pr_url state model effort rc2
   while IFS=$'\t' read -r task_id; do
     [ -n "$task_id" ] || continue
     is_safe_component "$task_id" || continue
@@ -241,7 +250,14 @@ discover_remote_home() {  # <id> <label>
       continue
     fi
     IFS=$'\x1f' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\x1f\x1f\x1f\n')
-    report_entry_json "$task_id" "$base" "$dest" "$title" "$project" "$pr_url" "$state" "unknown (remote)" false "" \
+    local meta_dest="$WORK_DIR/remote-$id-$task_id.meta"
+    model="" effort=""
+    if fm_run_timed "$REMOTE_TIMEOUT" "$FM_ROOT/bin/fm-on.sh" "$id" fm-remote-file.sh get \
+      "state/$task_id.meta" 16384 < /dev/null > "$meta_dest" 2>/dev/null; then
+      model=$(meta_value "$meta_dest" model)
+      effort=$(meta_value "$meta_dest" effort)
+    fi
+    report_entry_json "$task_id" "$base" "$dest" "$title" "$project" "$pr_url" "$state" "unknown (remote)" false "" "$model" "$effort" \
       >> "$reports_file"
   done < <(jq -r '.scout_reports[]?.id // empty' "$snapshot_json" 2>/dev/null)
 
