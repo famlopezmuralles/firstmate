@@ -7,7 +7,6 @@ Usage:
 Reads one "fm-reports-manifest.v1" JSON document on stdin (produced by
 bin/fm-reports-publish.sh) and writes, under <publish-root>:
   <project>/<task-id>/<slug>.html  one sanitized page per report
-  <project>/<task-id>/<file>.md    the persisted source markdown report
   <project>/index.html             static project index page
   catalog.json                     the client-side dataset
   index.html                       static root catalog index
@@ -26,9 +25,7 @@ import html
 import json
 import os
 import re
-import shutil
 import sys
-from datetime import datetime, timezone
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -60,11 +57,6 @@ def normalize_project_slug(raw_project: str | None) -> str:
     if p and SAFE_ID_RE.match(p):
         return p
     return "general"
-
-
-def is_historical_name(stem: str) -> bool:
-    s = stem.lower()
-    return "prior" in s or "before" in s
 
 
 class TokenBox:
@@ -253,7 +245,7 @@ header.provenance{border:1px solid #8884;border-radius:8px;padding:0.75rem 1rem;
   margin-bottom:1.5rem;font-size:0.9rem;}
 header.provenance dl{display:grid;grid-template-columns:auto 1fr;gap:0.15rem 0.75rem;margin:0;}
 header.provenance dt{font-weight:600;opacity:0.75;}
-header.provenance dd{margin:0;word-break:break-word;}
+header.provenance dd{margin:0;word-break:break-word;white-space:pre-wrap;}
 table{border-collapse:collapse;width:100%;margin:1rem 0;}
 th,td{border:1px solid #8884;padding:0.4rem 0.6rem;text-align:left;vertical-align:top;}
 pre{background:#8881;padding:0.75rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap;}
@@ -323,38 +315,41 @@ if (q) {
 """
 
 
+PROJECT_COLUMNS = ["report", "task", "home", "model", "effort", "date", "intent", "pr"]
+ROOT_COLUMNS = ["report", "project", "task", "home", "date", "pr"]
+
+
+def report_row_html(r: dict, href: str, columns: list[str]) -> str:
+    title_esc = html.escape(r.get("title") or r.get("task_id", ""))
+    badge = ' <span class="badge">historical</span>' if r.get("historical") else ""
+    tr_class = ' class="historical"' if r.get("historical") else ""
+    pr_cell = ""
+    pr_url = r.get("pr_url")
+    if pr_url and URL_RE.match(pr_url):
+        safe_pr = html.escape(pr_url, quote=True)
+        pr_cell = f'<a href="{safe_pr}" target="_blank" rel="noopener noreferrer">PR</a>'
+    project = html.escape(r["project"], quote=True)
+    cells = {
+        "report": f'<a href="{html.escape(href, quote=True)}">{title_esc}{badge}</a>',
+        "project": f'<a href="{project}/index.html">{project}</a>',
+        "task": html.escape(r.get("task_id", "")),
+        "home": html.escape(r.get("home", "")),
+        "model": html.escape(r.get("model") or "unknown"),
+        "effort": html.escape(r.get("thinking_effort") or "unknown"),
+        "date": html.escape(r.get("updated") or "unknown"),
+        "intent": html.escape(r.get("intent") or "unknown"),
+        "pr": pr_cell,
+    }
+    tds = "".join(f"<td>{cells[c]}</td>" for c in columns)
+    return f"<tr{tr_class}>{tds}</tr>"
+
+
 def project_index_html(project_slug: str, reports: list[dict]) -> str:
     safe_proj = html.escape(project_slug)
-    tbody_rows: list[str] = []
-    for r in reports:
-        tr_class = ' class="historical"' if r.get("historical") else ""
-        badge = ' <span class="badge">historical</span>' if r.get("historical") else ""
-        title_esc = html.escape(r.get("title") or r.get("task_id", ""))
-        stem_html = os.path.basename(r.get("html_path", "report.html"))
-        task_id = html.escape(r.get("task_id", ""))
-        rel_html = f"{task_id}/{stem_html}"
-        filename = html.escape(r.get("filename") or "report.md")
-        rel_md = f"{task_id}/{filename}"
-        home_esc = html.escape(r.get("home", ""))
-        updated_esc = html.escape(r.get("updated", "unknown"))
-        pr_cell = ""
-        pr_url = r.get("pr_url")
-        if pr_url and URL_RE.match(pr_url):
-            safe_pr = html.escape(pr_url, quote=True)
-            pr_cell = f'<a href="{safe_pr}" target="_blank" rel="noopener noreferrer">PR</a>'
-
-        tbody_rows.append(
-            f"""<tr{tr_class}>
-<td><a href="{rel_html}">{title_esc}{badge}</a></td>
-<td><a href="{rel_md}">{filename}</a></td>
-<td>{task_id}</td>
-<td>{home_esc}</td>
-<td>{updated_esc}</td>
-<td>{pr_cell}</td>
-</tr>"""
-        )
-
-    tbody_html = "\n".join(tbody_rows)
+    tbody_html = "\n".join(
+        report_row_html(r, f"{r['task_id']}/{os.path.basename(r['html_path'])}", PROJECT_COLUMNS)
+        for r in reports
+    )
     count = len(reports)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -368,7 +363,7 @@ def project_index_html(project_slug: str, reports: list[dict]) -> str:
 <p>{count} report(s). Local machine only.</p>
 <input id="q" type="search" placeholder="Filter {safe_proj} reports&hellip;">
 <table class="catalog" id="catalog">
-<thead><tr><th>Report</th><th>Source</th><th>Task</th><th>Home</th><th>Updated</th><th>PR</th></tr></thead>
+<thead><tr><th>Report</th><th>Task</th><th>Home</th><th>Model used</th><th>Thinking effort</th><th>Date</th><th>Captain's intent</th><th>PR</th></tr></thead>
 <tbody>
 {tbody_html}
 </tbody>
@@ -379,7 +374,6 @@ def project_index_html(project_slug: str, reports: list[dict]) -> str:
 
 
 def root_index_html(
-    generated: str,
     reports: list[dict],
     projects: list[str],
     unavailable: list[dict],
@@ -407,35 +401,7 @@ def root_index_html(
     )
     projects_nav = f'<nav class="projects-nav"><strong>Projects:</strong> {proj_links}</nav>' if sorted_projs else ""
 
-    tbody_rows: list[str] = []
-    for r in reports:
-        tr_class = ' class="historical"' if r.get("historical") else ""
-        badge = ' <span class="badge">historical</span>' if r.get("historical") else ""
-        title_esc = html.escape(r.get("title") or r.get("task_id", ""))
-        html_path = html.escape(r.get("html_path", ""))
-        proj = html.escape(r.get("project") or "general")
-        proj_link = f'<a href="{proj}/index.html">{proj}</a>'
-        task_id = html.escape(r.get("task_id", ""))
-        home_esc = html.escape(r.get("home", ""))
-        updated_esc = html.escape(r.get("updated", "unknown"))
-        pr_cell = ""
-        pr_url = r.get("pr_url")
-        if pr_url and URL_RE.match(pr_url):
-            safe_pr = html.escape(pr_url, quote=True)
-            pr_cell = f'<a href="{safe_pr}" target="_blank" rel="noopener noreferrer">PR</a>'
-
-        tbody_rows.append(
-            f"""<tr{tr_class}>
-<td><a href="{html_path}">{title_esc}{badge}</a></td>
-<td>{proj_link}</td>
-<td>{task_id}</td>
-<td>{home_esc}</td>
-<td>{updated_esc}</td>
-<td>{pr_cell}</td>
-</tr>"""
-        )
-
-    tbody_html = "\n".join(tbody_rows)
+    tbody_html = "\n".join(report_row_html(r, r["html_path"], ROOT_COLUMNS) for r in reports)
     count = len(reports)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -445,7 +411,7 @@ def root_index_html(
 <style>{INDEX_CSS}</style>
 </head><body>
 <h1>Firstmate report catalog</h1>
-<p>Generated {html.escape(generated)}. {count} report(s). Local machine only.</p>
+<p>{count} report(s). Local machine only.</p>
 {unavailable_html}
 {projects_nav}
 <input id="q" type="search" placeholder="Search by title, project, home, or task id&hellip;">
@@ -479,7 +445,6 @@ def main() -> int:
         print("fm-reports-render: unsupported manifest schema", file=sys.stderr)
         return 1
 
-    generated = manifest.get("generated") or datetime.now(timezone.utc).isoformat()
     skipped: list[str] = []
     persisted_reports: dict[tuple[str, str, str], dict] = {}
 
@@ -504,59 +469,19 @@ def main() -> int:
                     stem = os.path.splitext(os.path.basename(html_path))[0]
                     new_rel = f"{proj}/{task_id}/{stem}.html"
                     new_full = os.path.join(publish_root, new_rel)
-                    os.makedirs(os.path.dirname(new_full), exist_ok=True)
                     if not os.path.isfile(new_full):
-                        shutil.copy2(old_full, new_full)
+                        with open(old_full, "r", encoding="utf-8") as fh:
+                            legacy_page = fh.read()
+                        write_file(new_full, legacy_page.replace('href="../../../index.html"', 'href="../../index.html"'))
                     html_path = new_rel
                     r["html_path"] = new_rel
 
                 if os.path.isfile(os.path.join(publish_root, html_path)):
                     stem = os.path.splitext(os.path.basename(html_path))[0]
                     r["project"] = proj
-                    if not r.get("filename"):
-                        r["filename"] = f"{stem}.md"
                     persisted_reports[(proj, task_id, stem)] = r
         except Exception as exc:
             print(f"fm-reports-render: warning: could not load existing catalog.json: {exc}", file=sys.stderr)
-
-    # 2. Scan disk for any existing published report pages not yet in persisted_reports
-    try:
-        for proj_entry in os.scandir(publish_root):
-            if not proj_entry.is_dir() or proj_entry.name.startswith(".") or proj_entry.name in ("reports", "redesigns"):
-                continue
-            proj_slug = normalize_project_slug(proj_entry.name)
-            for task_entry in os.scandir(proj_entry.path):
-                if not task_entry.is_dir() or task_entry.name.startswith("."):
-                    continue
-                task_id = task_entry.name
-                if not SAFE_ID_RE.match(task_id):
-                    continue
-                for file_entry in os.scandir(task_entry.path):
-                    if file_entry.is_file() and file_entry.name.endswith(".html") and file_entry.name != "index.html":
-                        stem = file_entry.name[:-5]
-                        if not SAFE_ID_RE.match(stem):
-                            continue
-                        key = (proj_slug, task_id, stem)
-                        if key not in persisted_reports:
-                            stat = file_entry.stat()
-                            mtime = datetime.fromtimestamp(stat.st_mtime, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-                            md_name = f"{stem}.md"
-                            if not os.path.isfile(os.path.join(task_entry.path, md_name)):
-                                md_name = "report.md" if os.path.isfile(os.path.join(task_entry.path, "report.md")) else f"{stem}.md"
-                            title = stem.replace("-", " ").replace("_", " ")
-                            persisted_reports[key] = {
-                                "title": title,
-                                "home": "local",
-                                "project": proj_slug,
-                                "task_id": task_id,
-                                "filename": md_name,
-                                "updated": mtime,
-                                "pr_url": None,
-                                "html_path": f"{proj_slug}/{task_id}/{file_entry.name}",
-                                "historical": is_historical_name(stem),
-                            }
-    except Exception as exc:
-        print(f"fm-reports-render: warning: scanning publish root: {exc}", file=sys.stderr)
 
     # 3. Process reports from current manifest
     for home in manifest.get("homes", []):
@@ -586,61 +511,56 @@ def main() -> int:
             with open(content_path, "r", encoding="utf-8", errors="replace") as fh:
                 raw = fh.read()
 
-            raw_project = report.get("project")
-            proj_slug = normalize_project_slug(raw_project)
-            project_label = raw_project.strip() if raw_project and raw_project.strip() else proj_slug
-
+            proj_slug = normalize_project_slug(report.get("project"))
             title = report.get("title") or stem.replace("-", " ").replace("_", " ")
             body_html = render_markdown(raw)
             historical = bool(report.get("historical"))
+            pr_url = report.get("pr_url")
+            pr_url = pr_url if pr_url and URL_RE.match(pr_url) else None
+            intent = (report.get("intent") or "").strip() or None
+            model = report.get("model")
+            effort = report.get("thinking_effort")
             provenance = [
                 ("Home", html.escape(home_label)),
+                ("Project", f'<a href="../index.html">{html.escape(proj_slug)}</a>'),
                 ("Task", html.escape(task_id)),
-                ("Project", f'<a href="../index.html">{html.escape(project_label)}</a>'),
-                ("Source markdown", f'<a href="{html.escape(filename)}">{html.escape(filename)}</a>'),
-                ("Source file", html.escape(report.get("display_path", filename))),
-                ("Last updated", html.escape(report.get("mtime", "unknown"))),
+                ("Date", html.escape(report.get("mtime", "unknown"))),
+                ("Model used", html.escape(model or "unknown")),
+                ("Thinking effort", html.escape(effort or "unknown")),
+                ("Captain's intent", html.escape(intent or "unknown")),
             ]
-            pr_url = report.get("pr_url")
-            if pr_url and URL_RE.match(pr_url):
+            if pr_url:
                 safe_pr = html.escape(pr_url, quote=True)
                 provenance.append(("Linked PR", f'<a href="{safe_pr}" target="_blank" rel="noopener noreferrer">{html.escape(pr_url)}</a>'))
             backlog_state = report.get("backlog_state")
             if backlog_state:
                 provenance.append(("Backlog state", html.escape(backlog_state)))
 
-            task_dir = os.path.join(publish_root, proj_slug, task_id)
-            os.makedirs(task_dir, exist_ok=True)
-
-            # Persist source markdown
-            md_out_path = os.path.join(task_dir, filename)
-            try:
-                shutil.copy2(content_path, md_out_path)
-            except Exception:
-                write_file(md_out_path, raw)
-
-            # Render HTML page
             rel_html_path = f"{proj_slug}/{task_id}/{stem}.html"
-            out_html_path = os.path.join(publish_root, rel_html_path)
-            page = report_page_html(title, project_label, provenance, body_html, historical)
-            write_file(out_html_path, page)
+            write_file(
+                os.path.join(publish_root, rel_html_path),
+                report_page_html(title, proj_slug, provenance, body_html, historical),
+            )
 
-            key = (proj_slug, task_id, stem)
-            persisted_reports[key] = {
+            persisted_reports[(proj_slug, task_id, stem)] = {
                 "title": title,
                 "home": home_label,
                 "project": proj_slug,
                 "task_id": task_id,
-                "filename": filename,
                 "updated": report.get("mtime", "unknown"),
-                "pr_url": pr_url if pr_url and URL_RE.match(pr_url) else None,
+                "pr_url": pr_url,
                 "html_path": rel_html_path,
                 "historical": historical,
+                "intent": intent,
+                "model": model,
+                "thinking_effort": effort,
             }
 
-    all_reports = list(persisted_reports.values())
-    all_reports.sort(key=lambda r: (r.get("historical", False), r.get("updated") or ""), reverse=False)
-    all_reports.sort(key=lambda r: r.get("updated") or "", reverse=True)
+    all_reports = sorted(
+        persisted_reports.values(),
+        key=lambda r: (not r.get("historical", False), r.get("updated") or ""),
+        reverse=True,
+    )
 
     by_project: dict[str, list[dict]] = collections.defaultdict(list)
     for r in all_reports:
@@ -654,13 +574,13 @@ def main() -> int:
     # Write root catalog.json
     write_file(
         os.path.join(publish_root, "catalog.json"),
-        json.dumps({"generated": generated, "reports": all_reports}, indent=2),
+        json.dumps({"reports": all_reports}, indent=2),
     )
 
     # Write root index.html
     write_file(
         os.path.join(publish_root, "index.html"),
-        root_index_html(generated, all_reports, list(by_project.keys()), manifest.get("unavailable", []), manifest.get("limitations", [])),
+        root_index_html(all_reports, list(by_project.keys()), manifest.get("unavailable", []), manifest.get("limitations", [])),
     )
 
     if skipped:

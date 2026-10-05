@@ -5,14 +5,16 @@ Published reports are organized by project under `<publish-root>/<project>/...` 
 
 ## Persistence and decoupling from ephemeral worktrees
 
-When publishing, the source markdown report is copied and persisted alongside the rendered HTML into `<publish-root>/<project>/<task>/`.
+Only the sanitized HTML page for each report is persisted, under `<publish-root>/<project>/<task>/`; raw markdown is never copied into the publish root.
 Existing published reports are preserved on subsequent runs so that cleaning or pruning ephemeral `.treehouse` worktrees does not wipe them out.
+Each page's provenance header shows the canonical project and task, the home, the date, the model used, the thinking effort, and the captain's intent (the `## Captain's intent` section of the task brief).
+Model and thinking effort show `unknown` until a source records them.
 Remote reports fetched over registered SSH routes are likewise persisted locally in the publish root.
 
 ## Git repository integration
 
 The publish root (`$HOME/reports-published`, overridden with `FM_REPORTS_PUBLISH_ROOT`) is initialized as a Git repository (`git init` if absent) with a standard `.gitignore`.
-Each refresh pass stages changes and commits published reports to maintain version-controlled history across runs.
+A refresh commits only when it changes a published report; a routine refresh with nothing new leaves history untouched, because the rendered output carries no run-time timestamp.
 
 ## Navigation and directory indexing
 

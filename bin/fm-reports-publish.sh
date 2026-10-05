@@ -10,12 +10,13 @@
 # data/ tree and every registered secondmate home for worker reports, enriches
 # each with backlog context through bin/fm-fleet-snapshot.sh (never a second
 # backlog parser), and hands a discovery manifest to fm-reports-render.py, which
-# organizes published reports by project under the publish root (persisting
-# source markdown alongside rendered HTML), generates static project index.html
-# and root index.html pages without client-side fetching, and commits the
-# results to a Git repository inside FM_REPORTS_PUBLISH_ROOT (default
-# $HOME/reports-published). It preserves existing published reports across
-# worktree cleanup and never writes into a project or another home's data.
+# organizes published reports by project under the publish root (persisting only
+# sanitized HTML), generates static project index.html and root index.html
+# pages without client-side fetching, and commits the results to a Git
+# repository inside FM_REPORTS_PUBLISH_ROOT (default $HOME/reports-published)
+# only when a refresh changes a published report. It preserves existing
+# published reports across worktree cleanup and never writes into a project or
+# another home's data.
 #
 # `setup-apache` and `install-cron` are one-time, explicit, privileged/system
 # steps kept out of the recurring refresh: the former writes a local-only
@@ -123,16 +124,24 @@ backlog_context() {  # <snapshot-json-file> <task-id>
   ' "$1" 2>/dev/null | head -1
 }
 
-report_entry_json() {  # <task_id> <filename> <display_path> <content_path> <title> <project> <pr_url> <state> <mtime> <historical>
+# The "Captain's intent" section of a task's brief (its own ask, never a
+# parser of the brief beyond that one section). Empty when there is no brief.
+captain_intent() {  # <brief-path>
+  [ -f "$1" ] || return 0
+  awk '/^## Captain.s intent/ { inside = 1; next } /^## |^# / { inside = 0 } inside' "$1"
+}
+
+report_entry_json() {  # <task_id> <filename> <content_path> <title> <project> <pr_url> <state> <mtime> <historical> <intent>
   jq -n \
-    --arg task_id "$1" --arg filename "$2" --arg display_path "$3" --arg content_path "$4" \
-    --arg title "$5" --arg project "$6" --arg pr_url "$7" --arg state "$8" --arg mtime "$9" \
-    --argjson historical "${10}" \
-    '{task_id:$task_id,filename:$filename,display_path:$display_path,content_path:$content_path,
+    --arg task_id "$1" --arg filename "$2" --arg content_path "$3" \
+    --arg title "$4" --arg project "$5" --arg pr_url "$6" --arg state "$7" --arg mtime "$8" \
+    --argjson historical "$9" --arg intent "${10}" \
+    '{task_id:$task_id,filename:$filename,content_path:$content_path,
       title:(if $title == "" then null else $title end),
       project:(if $project == "" then null else $project end),
       pr_url:(if $pr_url == "" then null else $pr_url end),
       backlog_state:(if $state == "" then null else $state end),
+      intent:(if $intent == "" then null else $intent end),
       mtime:$mtime,historical:$historical}'
 }
 
@@ -176,8 +185,8 @@ discover_local_home() {  # <id> <label> <home_path>
     historical=false
     is_historical_name "$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]')" && historical=true
     IFS=$'\x1f' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\x1f\x1f\x1f\n')
-    report_entry_json "$task_id" "$base" "$file" "$file" "$title" "$project" "$pr_url" "$state" "$mtime" "$historical" \
-      >> "$reports_file"
+    report_entry_json "$task_id" "$base" "$file" "$title" "$project" "$pr_url" "$state" "$mtime" "$historical" \
+      "$(captain_intent "$task_dir/brief.md")" >> "$reports_file"
   done < <(
     find "$data_dir" -mindepth 2 -maxdepth 2 -type f -name '*.md' \
       -not -path "$data_dir/handoff/*" -not -path "$data_dir/remote-secondmates/*" 2>/dev/null | sort
@@ -232,7 +241,7 @@ discover_remote_home() {  # <id> <label>
       continue
     fi
     IFS=$'\x1f' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\x1f\x1f\x1f\n')
-    report_entry_json "$task_id" "$base" "$label: data/$task_id/report.md" "$dest" "$title" "$project" "$pr_url" "$state" "unknown (remote)" false \
+    report_entry_json "$task_id" "$base" "$dest" "$title" "$project" "$pr_url" "$state" "unknown (remote)" false "" \
       >> "$reports_file"
   done < <(jq -r '.scout_reports[]?.id // empty' "$snapshot_json" 2>/dev/null)
 
@@ -267,11 +276,10 @@ do_publish() {
   jq -s '.' "$UNAVAILABLE_FILE" > "$unavailable_array" 2>/dev/null || printf '[]' > "$unavailable_array"
 
   jq -n \
-    --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --slurpfile homes "$homes_array" \
     --slurpfile unavailable "$unavailable_array" \
     --argjson limitations '["Remote homes (reached only through the registered SSH route) are discovered through their own literal data/<task>/report.md files only; supplemental non-report.md reports on a remote home are not mirrored here."]' \
-    '{schema:"fm-reports-manifest.v1",generated:$generated,homes:$homes[0],unavailable:$unavailable[0],limitations:$limitations}' \
+    '{schema:"fm-reports-manifest.v1",homes:$homes[0],unavailable:$unavailable[0],limitations:$limitations}' \
     > "$WORK_DIR/manifest.json"
 
   mkdir -p "$PUBLISH_ROOT" || die "could not create publish root: $PUBLISH_ROOT"
@@ -301,7 +309,8 @@ EOF
     git -C "$PUBLISH_ROOT" \
       -c user.name="Firstmate" \
       -c user.email="firstmate@local" \
-      commit -q -m "publish: refresh report catalog $commit_date" || true
+      commit -q -m "publish: refresh report catalog $commit_date" \
+      || die "could not commit published reports in $PUBLISH_ROOT"
   fi
 }
 

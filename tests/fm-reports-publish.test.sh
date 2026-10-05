@@ -2,8 +2,9 @@
 # Tests for bin/fm-reports-publish.sh and bin/fm-reports-render.py: the
 # central report catalog must organize published reports by project (1:1 with
 # diffs-explained, with general fallback), persist source markdown alongside
-# rendered HTML, preserve existing published reports across worktree pruning,
-# initialize the publish root as a Git repository and commit on refresh,
+# rendered HTML only, preserve existing published reports across worktree pruning,
+# initialize the publish root as a Git repository and commit only when reports change,
+# carry the captain's intent in each report's provenance, migrate legacy pages,
 # provide static project and root index pages without client-side fetching,
 # aggregate registered secondmate homes, disclose unreachable remotes, and
 # never publish denylisted files, symlinks outside data/, or unsafe scripts.
@@ -51,6 +52,8 @@ make_fixture() {
   done
 
   printf '# Current\n\ncurrent content marker\n' > "$main/data/task-super/report.md"
+  printf "# Task\n\n## Captain's intent\n\nINTENT_MARKER_42\n\n## Firstmate spec\n\nbuild it\n" \
+    > "$main/data/task-super/brief.md"
   printf '# Prior\n\nold content marker\n' > "$main/data/task-super/prior-report.md"
 
   printf '# XSS <script>alert(1)</script>\n\n[bad](javascript:alert(1))\n' \
@@ -94,13 +97,14 @@ test_report_candidate_included_with_backlog_context() {
     "task-good should be published under demo-repo"
   [ -f "$root/publish/demo-repo/task-good/report.html" ] \
     || fail "task-good/report.html should be written under demo-repo"
-  [ -f "$root/publish/demo-repo/task-good/report.md" ] \
-    || fail "task-good/report.md source markdown should be persisted"
   [ -f "$root/publish/demo-repo/index.html" ] \
     || fail "demo-repo/index.html project index should be generated"
   [ -f "$root/publish/index.html" ] \
     || fail "root index.html should be generated"
-  pass "a plain report.md is published under its project with persisted markdown and static index"
+  local md_count
+  md_count=$(find "$root/publish" -name '*.md' | wc -l)
+  assert_equals "0" "$md_count" "raw markdown must never be persisted into the publish root"
+  pass "a plain report.md is published as sanitized HTML under its project with a static index"
 }
 
 test_denylisted_files_never_published() {
@@ -131,10 +135,6 @@ test_superseded_variant_marked_historical() {
     || fail "the current report.html should still be published"
   [ -f "$root/publish/demo-repo/task-super/prior-report.html" ] \
     || fail "the superseded prior-report.html should still be published, not hidden"
-  [ -f "$root/publish/demo-repo/task-super/report.md" ] \
-    || fail "current report.md source markdown should be persisted"
-  [ -f "$root/publish/demo-repo/task-super/prior-report.md" ] \
-    || fail "prior-report.md source markdown should be persisted"
 
   assert_contains "$json" '"task_id": "task-super"' "task-super should be in the catalog"
   assert_contains "$(python3 -c "
@@ -209,8 +209,6 @@ test_registered_secondmate_is_aggregated() {
     "the registered local secondmate home's report should be aggregated into the catalog"
   [ -f "$root/publish/other-repo/task-remote-sib/report.html" ] \
     || fail "the secondmate's report page should be written under its project directory"
-  [ -f "$root/publish/other-repo/task-remote-sib/report.md" ] \
-    || fail "the secondmate's source markdown should be persisted"
   [ -f "$root/publish/other-repo/index.html" ] \
     || fail "other-repo project index should be generated"
   pass "a registered local secondmate home's reports are aggregated by project"
@@ -238,8 +236,6 @@ test_unknown_project_falls_back_to_general() {
 
   [ -f "$root/publish/general/task-orphan/report.html" ] \
     || fail "orphan task should be published under general"
-  [ -f "$root/publish/general/task-orphan/report.md" ] \
-    || fail "orphan task source markdown should be persisted under general"
   [ -f "$root/publish/general/index.html" ] \
     || fail "general project index should be generated"
   assert_contains "$(catalog_json "$root")" '"project": "general"' \
@@ -255,8 +251,6 @@ test_persistence_when_worktree_pruned() {
 
   [ -f "$root/publish/demo-repo/task-good/report.html" ] \
     || fail "report.html should exist before prune"
-  [ -f "$root/publish/demo-repo/task-good/report.md" ] \
-    || fail "report.md should exist before prune"
 
   # Simulate worktree pruning: remove task-good from source data directory
   rm -rf "$root/main/data/task-good"
@@ -266,15 +260,13 @@ test_persistence_when_worktree_pruned() {
 
   [ -f "$root/publish/demo-repo/task-good/report.html" ] \
     || fail "report.html must be preserved after source data is pruned"
-  [ -f "$root/publish/demo-repo/task-good/report.md" ] \
-    || fail "report.md source must be preserved after source data is pruned"
   assert_contains "$(catalog_json "$root")" '"task_id": "task-good"' \
     "task-good must remain in catalog.json after source prune"
   assert_contains "$(cat "$root/publish/demo-repo/index.html")" 'task-good' \
     "task-good must remain in project index after source prune"
   assert_contains "$(cat "$root/publish/index.html")" 'task-good' \
     "task-good must remain in root index after source prune"
-  pass "existing published reports and source markdown are preserved across worktree prunes"
+  pass "existing published reports are preserved across worktree prunes"
 }
 
 test_git_repository_initialized_and_committed() {
@@ -295,6 +287,61 @@ test_git_repository_initialized_and_committed() {
   assert_contains "$log_msg" "publish: refresh report catalog" \
     "git repository should contain refresh commit"
   pass "publish root is initialized as git repository with .gitignore and version-controlled on refresh"
+}
+
+test_refresh_commits_only_when_reports_change() {
+  local root before after
+  root=$(fm_test_tmproot fm-reports-nocommit)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "first publish failed: $(cat "$root/stderr")"
+  before=$(git -C "$root/publish" rev-list --count HEAD)
+
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "routine publish failed: $(cat "$root/stderr")"
+  after=$(git -C "$root/publish" rev-list --count HEAD)
+  assert_equals "$before" "$after" "a routine refresh with no report changes must not create a commit"
+
+  printf '# Good report\n\nEdited body.\n' > "$root/main/data/task-good/report.md"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "changed publish failed: $(cat "$root/stderr")"
+  after=$(git -C "$root/publish" rev-list --count HEAD)
+  assert_equals "$((before + 1))" "$after" "a refresh that publishes a modified report must commit once"
+  pass "the publish root commits only when new or modified reports are published"
+}
+
+test_provenance_carries_intent_and_hides_ephemeral_paths() {
+  local root page
+  root=$(fm_test_tmproot fm-reports-provenance)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+  page=$(cat "$root/publish/demo-repo/task-super/report.html")
+
+  assert_contains "$page" "INTENT_MARKER_42" \
+    "the captain's intent from the task brief must appear in the provenance header"
+  assert_contains "$page" "Thinking effort" "the provenance header must name the thinking effort"
+  assert_not_contains "$page" "$root/main" \
+    "the provenance header must not expose the ephemeral local source path"
+  pass "provenance carries the captain's intent and omits ephemeral local paths"
+}
+
+test_legacy_pages_migrate_with_root_back_link() {
+  local root page
+  root=$(fm_test_tmproot fm-reports-legacy)
+  make_fixture "$root"
+  mkdir -p "$root/publish/reports/main/task-legacy"
+  printf '<p><a href="../../../index.html">&larr; Back to report catalog</a></p>\n' \
+    > "$root/publish/reports/main/task-legacy/report.html"
+  printf '{"reports":[{"title":"Legacy","home":"main","task_id":"task-legacy","html_path":"reports/main/task-legacy/report.html","updated":"2026-01-01T00:00:00Z","historical":false}]}' \
+    > "$root/publish/catalog.json"
+
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+  page=$(cat "$root/publish/general/task-legacy/report.html")
+
+  assert_contains "$page" 'href="../../index.html"' \
+    "a migrated legacy page must link back to the publish root from its new location"
+  assert_not_contains "$page" '../../../index.html' \
+    "the legacy back link must not resolve outside the publish root"
+  assert_contains "$(catalog_json "$root")" '"html_path": "general/task-legacy/report.html"' \
+    "the migrated legacy report must be recorded at its new path"
+  pass "legacy reports migrate into the project layout with a working back link"
 }
 
 test_static_navigation_without_client_side_fetch() {
@@ -319,8 +366,6 @@ test_static_navigation_without_client_side_fetch() {
     "project index must contain report row"
   assert_contains "$project_index" 'task-good/report.html' \
     "project index must link to report html"
-  assert_contains "$project_index" 'task-good/report.md' \
-    "project index must link to source markdown"
   assert_contains "$project_index" '../index.html' \
     "project index must link back to root catalog"
   pass "static navigation works cleanly without client-side fetching"
@@ -336,4 +381,7 @@ test_unreachable_remote_is_disclosed_not_silently_empty
 test_unknown_project_falls_back_to_general
 test_persistence_when_worktree_pruned
 test_git_repository_initialized_and_committed
+test_refresh_commits_only_when_reports_change
+test_provenance_carries_intent_and_hides_ephemeral_paths
+test_legacy_pages_migrate_with_root_back_link
 test_static_navigation_without_client_side_fetch
