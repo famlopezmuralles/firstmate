@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Tests for bin/fm-reports-publish.sh and bin/fm-reports-render.py: the
-# central report catalog must include genuine worker reports (including a
-# supplemental file not literally named report.md), mark a superseded variant
-# historical, aggregate a registered local secondmate home, disclose an
-# unreachable registered remote home rather than reporting it as empty, and
-# never publish a brief/decision/steering file, a symlinked file outside
-# data/, or an executable script from report content.
+# central report catalog must organize published reports by project (1:1 with
+# diffs-explained, with general fallback), persist source markdown alongside
+# rendered HTML, preserve existing published reports across worktree pruning,
+# initialize the publish root as a Git repository and commit on refresh,
+# provide static project and root index pages without client-side fetching,
+# aggregate registered secondmate homes, disclose unreachable remotes, and
+# never publish denylisted files, symlinks outside data/, or unsafe scripts.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -31,12 +32,13 @@ make_fixture() {
   local root=$1 main=$1/main second=$1/second
 
   mkdir -p "$main/data/task-good" "$main/data/task-super" "$main/data/task-xss" \
-    "$main/data/task-link" "$second/data/task-remote-sib"
+    "$main/data/task-link" "$main/data/task-orphan" "$second/data/task-remote-sib"
 
   snapshot_stub "$main/bin/fm-fleet-snapshot.sh" '[
     {"id":"task-good","structured":true,"title":"Good report task","repo":"demo-repo","pr_url":"https://github.com/example/demo/pull/1","state":"done"},
     {"id":"task-super","structured":true,"title":"Superseded task","repo":"demo-repo","pr_url":"","state":"done"},
-    {"id":"task-xss","structured":true,"title":"XSS task","repo":"demo-repo","pr_url":"","state":"in_flight"}
+    {"id":"task-xss","structured":true,"title":"XSS task","repo":"demo-repo","pr_url":"","state":"in_flight"},
+    {"id":"task-orphan","structured":true,"title":"Orphan task","repo":"","pr_url":"","state":"done"}
   ]'
   snapshot_stub "$second/bin/fm-fleet-snapshot.sh" '[
     {"id":"task-remote-sib","structured":true,"title":"Sibling home task","repo":"other-repo","pr_url":"","state":"done"}
@@ -53,6 +55,8 @@ make_fixture() {
 
   printf '# XSS <script>alert(1)</script>\n\n[bad](javascript:alert(1))\n' \
     > "$main/data/task-xss/report.md"
+
+  printf '# Orphan report\n\nNo associated project.\n' > "$main/data/task-orphan/report.md"
 
   printf 'SECRET_OUTSIDE_DATA\n' > "$root/secret.txt"
   ln -s "$root/secret.txt" "$main/data/task-link/report.md"
@@ -86,9 +90,17 @@ test_report_candidate_included_with_backlog_context() {
     "task-good's project should come from backlog context, not be invented"
   assert_contains "$(catalog_json "$root")" 'pull/1' \
     "task-good's linked PR should come from backlog context"
-  [ -f "$root/publish/reports/main/task-good/report.html" ] \
-    || fail "task-good/report.html should be written"
-  pass "a plain report.md is published with its backlog-derived project and PR"
+  assert_contains "$(catalog_json "$root")" '"html_path": "demo-repo/task-good/report.html"' \
+    "task-good should be published under demo-repo"
+  [ -f "$root/publish/demo-repo/task-good/report.html" ] \
+    || fail "task-good/report.html should be written under demo-repo"
+  [ -f "$root/publish/demo-repo/task-good/report.md" ] \
+    || fail "task-good/report.md source markdown should be persisted"
+  [ -f "$root/publish/demo-repo/index.html" ] \
+    || fail "demo-repo/index.html project index should be generated"
+  [ -f "$root/publish/index.html" ] \
+    || fail "root index.html should be generated"
+  pass "a plain report.md is published under its project with persisted markdown and static index"
 }
 
 test_denylisted_files_never_published() {
@@ -102,7 +114,7 @@ test_denylisted_files_never_published() {
   [ -z "$found" ] || fail "a denylisted file leaked into the catalog: $found"
 
   local html_count
-  html_count=$(find "$root/publish/reports/main/task-good" -type f -name '*.html' | wc -l)
+  html_count=$(find "$root/publish/demo-repo/task-good" -type f -name '*.html' | wc -l)
   assert_equals "1" "$html_count" \
     "only report.md should be published for task-good, not its brief/decision/steer siblings"
   pass "briefs, decisions, and steering notes are never published"
@@ -115,10 +127,14 @@ test_superseded_variant_marked_historical() {
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
   json=$(catalog_json "$root")
 
-  [ -f "$root/publish/reports/main/task-super/report.html" ] \
-    || fail "the current report.md should still be published"
-  [ -f "$root/publish/reports/main/task-super/prior-report.html" ] \
-    || fail "the superseded prior-report.md should still be published, not hidden"
+  [ -f "$root/publish/demo-repo/task-super/report.html" ] \
+    || fail "the current report.html should still be published"
+  [ -f "$root/publish/demo-repo/task-super/prior-report.html" ] \
+    || fail "the superseded prior-report.html should still be published, not hidden"
+  [ -f "$root/publish/demo-repo/task-super/report.md" ] \
+    || fail "current report.md source markdown should be persisted"
+  [ -f "$root/publish/demo-repo/task-super/prior-report.md" ] \
+    || fail "prior-report.md source markdown should be persisted"
 
   assert_contains "$json" '"task_id": "task-super"' "task-super should be in the catalog"
   assert_contains "$(python3 -c "
@@ -154,7 +170,7 @@ test_report_content_is_sanitized() {
   root=$(fm_test_tmproot fm-reports-xss)
   make_fixture "$root"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
-  page=$(cat "$root/publish/reports/main/task-xss/report.html")
+  page=$(cat "$root/publish/demo-repo/task-xss/report.html")
 
   assert_not_contains "$page" '<script>alert' \
     "a literal <script> tag in report content must never reach the rendered page"
@@ -171,8 +187,10 @@ test_symlinked_report_is_excluded() {
   make_fixture "$root"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
 
-  [ ! -e "$root/publish/reports/main/task-link" ] \
+  [ ! -e "$root/publish/demo-repo/task-link" ] \
     || fail "a symlinked report.md must not be published"
+  [ ! -e "$root/publish/general/task-link" ] \
+    || fail "a symlinked report.md must not be published under general"
   assert_not_contains "$(catalog_json "$root")" 'task-link' \
     "task-link must not appear in the catalog"
   local leaked
@@ -189,9 +207,13 @@ test_registered_secondmate_is_aggregated() {
 
   assert_contains "$(catalog_json "$root")" '"task_id": "task-remote-sib"' \
     "the registered local secondmate home's report should be aggregated into the catalog"
-  [ -f "$root/publish/reports/second/task-remote-sib/report.html" ] \
-    || fail "the secondmate's report page should be written under its own home directory"
-  pass "a registered local secondmate home's reports are aggregated into the one catalog"
+  [ -f "$root/publish/other-repo/task-remote-sib/report.html" ] \
+    || fail "the secondmate's report page should be written under its project directory"
+  [ -f "$root/publish/other-repo/task-remote-sib/report.md" ] \
+    || fail "the secondmate's source markdown should be persisted"
+  [ -f "$root/publish/other-repo/index.html" ] \
+    || fail "other-repo project index should be generated"
+  pass "a registered local secondmate home's reports are aggregated by project"
 }
 
 test_unreachable_remote_is_disclosed_not_silently_empty() {
@@ -208,6 +230,102 @@ test_unreachable_remote_is_disclosed_not_silently_empty() {
   pass "an unreachable registered remote home is disclosed rather than silently omitted"
 }
 
+test_unknown_project_falls_back_to_general() {
+  local root
+  root=$(fm_test_tmproot fm-reports-orphan)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  [ -f "$root/publish/general/task-orphan/report.html" ] \
+    || fail "orphan task should be published under general"
+  [ -f "$root/publish/general/task-orphan/report.md" ] \
+    || fail "orphan task source markdown should be persisted under general"
+  [ -f "$root/publish/general/index.html" ] \
+    || fail "general project index should be generated"
+  assert_contains "$(catalog_json "$root")" '"project": "general"' \
+    "orphan task should carry general project in catalog"
+  pass "an unassociated report falls back to the clean general project grouping"
+}
+
+test_persistence_when_worktree_pruned() {
+  local root
+  root=$(fm_test_tmproot fm-reports-prune)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "first publish failed: $(cat "$root/stderr")"
+
+  [ -f "$root/publish/demo-repo/task-good/report.html" ] \
+    || fail "report.html should exist before prune"
+  [ -f "$root/publish/demo-repo/task-good/report.md" ] \
+    || fail "report.md should exist before prune"
+
+  # Simulate worktree pruning: remove task-good from source data directory
+  rm -rf "$root/main/data/task-good"
+
+  # Run publish again
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "second publish failed: $(cat "$root/stderr")"
+
+  [ -f "$root/publish/demo-repo/task-good/report.html" ] \
+    || fail "report.html must be preserved after source data is pruned"
+  [ -f "$root/publish/demo-repo/task-good/report.md" ] \
+    || fail "report.md source must be preserved after source data is pruned"
+  assert_contains "$(catalog_json "$root")" '"task_id": "task-good"' \
+    "task-good must remain in catalog.json after source prune"
+  assert_contains "$(cat "$root/publish/demo-repo/index.html")" 'task-good' \
+    "task-good must remain in project index after source prune"
+  assert_contains "$(cat "$root/publish/index.html")" 'task-good' \
+    "task-good must remain in root index after source prune"
+  pass "existing published reports and source markdown are preserved across worktree prunes"
+}
+
+test_git_repository_initialized_and_committed() {
+  local root
+  root=$(fm_test_tmproot fm-reports-git)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  [ -d "$root/publish/.git" ] || fail "publish root should be initialized as git repository"
+  [ -f "$root/publish/.gitignore" ] || fail ".gitignore should exist in publish root"
+
+  local status
+  status=$(git -C "$root/publish" status --porcelain)
+  [ -z "$status" ] || fail "git working tree should be clean after publish commit: $status"
+
+  local log_msg
+  log_msg=$(git -C "$root/publish" log -1 --pretty=%B)
+  assert_contains "$log_msg" "publish: refresh report catalog" \
+    "git repository should contain refresh commit"
+  pass "publish root is initialized as git repository with .gitignore and version-controlled on refresh"
+}
+
+test_static_navigation_without_client_side_fetch() {
+  local root index_content project_index
+  root=$(fm_test_tmproot fm-reports-nav)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  index_content=$(cat "$root/publish/index.html")
+  project_index=$(cat "$root/publish/demo-repo/index.html")
+
+  assert_contains "$index_content" 'Good report task' \
+    "root index.html must contain static report table row"
+  assert_contains "$index_content" 'demo-repo/task-good/report.html' \
+    "root index.html must link to report page"
+  assert_contains "$index_content" 'demo-repo/index.html' \
+    "root index.html must link to project index"
+  assert_not_contains "$index_content" "fetch('catalog.json')" \
+    "root index.html must not rely on fragile client-side fetching"
+
+  assert_contains "$project_index" 'Good report task' \
+    "project index must contain report row"
+  assert_contains "$project_index" 'task-good/report.html' \
+    "project index must link to report html"
+  assert_contains "$project_index" 'task-good/report.md' \
+    "project index must link to source markdown"
+  assert_contains "$project_index" '../index.html' \
+    "project index must link back to root catalog"
+  pass "static navigation works cleanly without client-side fetching"
+}
+
 test_report_candidate_included_with_backlog_context
 test_denylisted_files_never_published
 test_superseded_variant_marked_historical
@@ -215,3 +333,7 @@ test_report_content_is_sanitized
 test_symlinked_report_is_excluded
 test_registered_secondmate_is_aggregated
 test_unreachable_remote_is_disclosed_not_silently_empty
+test_unknown_project_falls_back_to_general
+test_persistence_when_worktree_pruned
+test_git_repository_initialized_and_committed
+test_static_navigation_without_client_side_fetch

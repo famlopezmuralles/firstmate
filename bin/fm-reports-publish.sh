@@ -6,15 +6,16 @@
 #   fm-reports-publish.sh setup-apache
 #   fm-reports-publish.sh install-cron
 #
-# `publish` (the default) is the recurring, side-effect-free refresh: it scans
-# this home's own data/ tree and every registered secondmate home for worker
-# reports, enriches each with backlog context through
-# bin/fm-fleet-snapshot.sh (never a second backlog parser), and hands a
-# discovery manifest to fm-reports-render.py, which writes sanitized HTML
-# pages, a search index, and index.html under the publish root. It never
-# writes into a project, another home's data, or firstmate's own tracked
-# state; the only writes are inside FM_REPORTS_PUBLISH_ROOT (default
-# $HOME/reports-published) and this command's own scratch directory.
+# `publish` (the default) is the recurring refresh: it scans this home's own
+# data/ tree and every registered secondmate home for worker reports, enriches
+# each with backlog context through bin/fm-fleet-snapshot.sh (never a second
+# backlog parser), and hands a discovery manifest to fm-reports-render.py, which
+# organizes published reports by project under the publish root (persisting
+# source markdown alongside rendered HTML), generates static project index.html
+# and root index.html pages without client-side fetching, and commits the
+# results to a Git repository inside FM_REPORTS_PUBLISH_ROOT (default
+# $HOME/reports-published). It preserves existing published reports across
+# worktree cleanup and never writes into a project or another home's data.
 #
 # `setup-apache` and `install-cron` are one-time, explicit, privileged/system
 # steps kept out of the recurring refresh: the former writes a local-only
@@ -66,6 +67,7 @@ esac
 
 command -v jq >/dev/null 2>&1 || die "jq not found"
 command -v python3 >/dev/null 2>&1 || die "python3 not found"
+command -v git >/dev/null 2>&1 || die "git not found"
 
 WORK_DIR=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-reports-publish.XXXXXX") || die "could not create scratch directory"
 cleanup() { rm -rf -- "$WORK_DIR"; }
@@ -117,7 +119,7 @@ mtime_iso() {  # <path>
 backlog_context() {  # <snapshot-json-file> <task-id>
   jq -r --arg id "$2" '
     (.backlog.records[]? | select(.id == $id)) as $r
-    | [($r.title // ""), ($r.repo // ""), ($r.pr_url // ""), ($r.state // "")] | @tsv
+    | [($r.title // ""), ($r.repo // ""), ($r.pr_url // ""), ($r.state // "")] | join("\u001f")
   ' "$1" 2>/dev/null | head -1
 }
 
@@ -173,7 +175,7 @@ discover_local_home() {  # <id> <label> <home_path>
     mtime=$(mtime_iso "$file") || mtime="unknown"
     historical=false
     is_historical_name "$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]')" && historical=true
-    IFS=$'\t' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\t\t\t\n')
+    IFS=$'\x1f' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\x1f\x1f\x1f\n')
     report_entry_json "$task_id" "$base" "$file" "$file" "$title" "$project" "$pr_url" "$state" "$mtime" "$historical" \
       >> "$reports_file"
   done < <(
@@ -229,7 +231,7 @@ discover_remote_home() {  # <id> <label>
       note_unavailable "$label: $task_id/report.md" "fetch failed (exit $rc2): $(head -c 160 "$WORK_DIR/$id.$task_id.fetch.err" 2>/dev/null)"
       continue
     fi
-    IFS=$'\t' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\t\t\t\n')
+    IFS=$'\x1f' read -r title project pr_url state < <(backlog_context "$snapshot_json" "$task_id" || printf '\x1f\x1f\x1f\n')
     report_entry_json "$task_id" "$base" "$label: data/$task_id/report.md" "$dest" "$title" "$project" "$pr_url" "$state" "unknown (remote)" false \
       >> "$reports_file"
   done < <(jq -r '.scout_reports[]?.id // empty' "$snapshot_json" 2>/dev/null)
@@ -274,7 +276,33 @@ do_publish() {
 
   mkdir -p "$PUBLISH_ROOT" || die "could not create publish root: $PUBLISH_ROOT"
   chmod 755 "$PUBLISH_ROOT" 2>/dev/null || true
+
+  if [ ! -d "$PUBLISH_ROOT/.git" ]; then
+    git -C "$PUBLISH_ROOT" init -q || die "could not initialize git repository in $PUBLISH_ROOT"
+  fi
+
+  if [ ! -f "$PUBLISH_ROOT/.gitignore" ]; then
+    cat > "$PUBLISH_ROOT/.gitignore" <<'EOF'
+# Temporary and editor files
+*.tmp
+*.tmp.*
+*.log
+.DS_Store
+*~
+EOF
+  fi
+
   python3 "$SCRIPT_DIR/fm-reports-render.py" "$PUBLISH_ROOT" < "$WORK_DIR/manifest.json"
+
+  git -C "$PUBLISH_ROOT" add -A
+  if ! git -C "$PUBLISH_ROOT" diff --cached --quiet; then
+    local commit_date
+    commit_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    git -C "$PUBLISH_ROOT" \
+      -c user.name="Firstmate" \
+      -c user.email="firstmate@local" \
+      commit -q -m "publish: refresh report catalog $commit_date" || true
+  fi
 }
 
 do_setup_apache() {
