@@ -6,7 +6,7 @@ Published reports are organized by project under `<publish-root>/<project>/...` 
 ## Persistence and decoupling from ephemeral worktrees
 
 Only the sanitized HTML page for each report is persisted, directly under `<publish-root>/<project>/<task>.html` or `<task>__<stem>.html` for supplemental reports; raw markdown is never copied into the publish root.
-Project paths retain owner/repository namespaces by replacing `/` with `-` (for example, `owner/repo` becomes `owner-repo`). When different homes report the same task and report stem in the same project, the filename includes `__<home>` after the task and optional stem so neither report overwrites the other.
+Project directories replace `/` with `-` (for example, `owner/repo` becomes `owner-repo`), so two projects whose names differ only in that mapping currently share one directory. When different homes report the same task and report stem in the same project, the filename includes `__<home>` after the task and optional stem so neither report overwrites the other.
 Existing published reports are preserved on subsequent runs so that cleaning or pruning ephemeral `.treehouse` worktrees does not wipe them out.
 Each page's provenance header shows the canonical project and task, the home, the date, the model used, the thinking effort, and the captain's intent (the `## Captain's intent` section of the task brief).
 Model and thinking effort show `unknown` until a source records them.
