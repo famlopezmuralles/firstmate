@@ -6,10 +6,10 @@ Usage:
 
 Reads one "fm-reports-manifest.v1" JSON document on stdin (produced by
 bin/fm-reports-publish.sh) and writes, under <publish-root>:
-  reports/<home-id>/<task-id>/<slug>.html  one sanitized page per report
-  catalog.json                             the client-side search dataset
-  index.html                               the catalog shell (title/project/
-                                            date navigation and search)
+  <project>/<task-id>[__<stem>][__<home>].html  one sanitized page per report
+  <project>/index.html             static project index page
+  catalog.json                     the client-side dataset
+  index.html                       static root catalog index
 
 Every report body is HTML-escaped before any markup is reconstructed, so
 source content can never inject a tag, attribute, or script; only a small
@@ -20,12 +20,12 @@ not a summarizer: it never adds, reorders, or interprets report content.
 """
 from __future__ import annotations
 
+import collections
 import html
 import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
@@ -48,6 +48,15 @@ def safe_component(value: str) -> str:
     if not value or not SAFE_ID_RE.match(value):
         raise ValueError(f"unsafe path component: {value!r}")
     return value
+
+
+def normalize_project_slug(raw_project: str | None) -> str:
+    if not raw_project:
+        return "general"
+    p = raw_project.strip().lower().replace("/", "-")
+    if p not in {".", ".."} and SAFE_ID_RE.match(p):
+        return p
+    return "general"
 
 
 class TokenBox:
@@ -230,13 +239,13 @@ def render_markdown(raw_text: str) -> str:
 
 PAGE_CSS = """
 :root{color-scheme:light dark;}
-body{font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif;
   max-width:860px;margin:0 auto;padding:1.5rem;line-height:1.55;}
 header.provenance{border:1px solid #8884;border-radius:8px;padding:0.75rem 1rem;
   margin-bottom:1.5rem;font-size:0.9rem;}
 header.provenance dl{display:grid;grid-template-columns:auto 1fr;gap:0.15rem 0.75rem;margin:0;}
 header.provenance dt{font-weight:600;opacity:0.75;}
-header.provenance dd{margin:0;word-break:break-word;}
+header.provenance dd{margin:0;word-break:break-word;white-space:pre-wrap;}
 table{border-collapse:collapse;width:100%;margin:1rem 0;}
 th,td{border:1px solid #8884;padding:0.4rem 0.6rem;text-align:left;vertical-align:top;}
 pre{background:#8881;padding:0.75rem;border-radius:6px;overflow-x:auto;white-space:pre-wrap;}
@@ -245,16 +254,27 @@ pre code{background:none;padding:0;}
 .badge{display:inline-block;font-size:0.75rem;border-radius:4px;padding:0.1rem 0.5rem;
   background:#c8891a33;border:1px solid #c8891a88;margin-left:0.5rem;}
 a{word-break:break-word;}
+.nav-bar{margin-bottom:1.5rem;font-size:0.95rem;}
+.projects-nav{margin:1rem 0;padding:0.75rem 1rem;border:1px solid #8884;border-radius:8px;font-size:0.9rem;}
+.projects-nav strong{margin-right:0.5rem;}
+.projects-nav a{margin-right:0.6rem;display:inline-block;}
 @media (max-width:600px){body{padding:1rem;}}
 """
 
 
-def report_page_html(title: str, provenance_rows: list[tuple[str, str]], body_html: str, historical: bool) -> str:
+def report_page_html(
+    title: str,
+    project_label: str,
+    provenance_rows: list[tuple[str, str]],
+    body_html: str,
+    historical: bool,
+) -> str:
     rows = "".join(
         f"<dt>{html.escape(k)}</dt><dd>{v}</dd>" for k, v in provenance_rows
     )
-    badge = '<span class="badge">historical / superseded</span>' if historical else ""
+    badge = ' <span class="badge">historical / superseded</span>' if historical else ""
     safe_title = html.escape(title)
+    safe_proj = html.escape(project_label)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -262,7 +282,7 @@ def report_page_html(title: str, provenance_rows: list[tuple[str, str]], body_ht
 <title>{safe_title}</title>
 <style>{PAGE_CSS}</style>
 </head><body>
-<p><a href="../../../index.html">&larr; Back to report catalog</a></p>
+<p class="nav-bar"><a href="index.html">&larr; Back to {safe_proj} reports</a> &middot; <a href="../index.html">All reports</a></p>
 <h1>{safe_title}{badge}</h1>
 <header class="provenance"><dl>{rows}</dl></header>
 {body_html}
@@ -281,54 +301,84 @@ tr.historical{opacity:0.65;}
 """
 
 INDEX_JS = """
-let ROWS = [];
-function cell(text){ const d=document.createElement('td'); d.textContent=text||''; return d; }
-function render(rows){
-  const tbody = document.querySelector('#catalog tbody');
-  tbody.innerHTML = '';
-  for (const r of rows) {
-    const tr = document.createElement('tr');
-    if (r.historical) tr.className = 'historical';
-    const titleTd = document.createElement('td');
-    const a = document.createElement('a');
-    a.href = r.html_path;
-    a.textContent = r.title + (r.historical ? ' (historical)' : '');
-    titleTd.appendChild(a);
-    tr.appendChild(titleTd);
-    tr.appendChild(cell(r.home));
-    tr.appendChild(cell(r.project || 'unknown'));
-    tr.appendChild(cell(r.task_id));
-    tr.appendChild(cell(r.updated));
-    const prTd = document.createElement('td');
-    if (r.pr_url) {
-      const pa = document.createElement('a');
-      pa.href = r.pr_url; pa.textContent = 'PR'; pa.target = '_blank';
-      pa.rel = 'noopener noreferrer';
-      prTd.appendChild(pa);
+const q = document.querySelector('#q');
+if (q) {
+  q.addEventListener('input', () => {
+    const term = q.value.toLowerCase();
+    const rows = document.querySelectorAll('#catalog tbody tr');
+    for (const row of rows) {
+      const text = row.textContent.toLowerCase();
+      row.style.display = text.includes(term) ? '' : 'none';
     }
-    tr.appendChild(prTd);
-    tbody.appendChild(tr);
-  }
+  });
 }
-function applyFilter(){
-  const q = document.querySelector('#q').value.toLowerCase();
-  if (!q) { render(ROWS); return; }
-  render(ROWS.filter(r =>
-    (r.title && r.title.toLowerCase().includes(q)) ||
-    (r.project && r.project.toLowerCase().includes(q)) ||
-    (r.home && r.home.toLowerCase().includes(q)) ||
-    (r.task_id && r.task_id.toLowerCase().includes(q))
-  ));
-}
-fetch('catalog.json').then(r => r.json()).then(data => {
-  ROWS = data.reports || [];
-  render(ROWS);
-  document.querySelector('#q').addEventListener('input', applyFilter);
-});
 """
 
 
-def index_html(generated: str, unavailable: list[dict], limitations: list[str]) -> str:
+PROJECT_COLUMNS = ["report", "task", "home", "model", "effort", "date", "intent", "pr"]
+ROOT_COLUMNS = ["report", "project", "task", "home", "date", "pr"]
+
+
+def report_row_html(r: dict, href: str, columns: list[str]) -> str:
+    title_esc = html.escape(r.get("title") or r.get("task_id", ""))
+    badge = ' <span class="badge">historical</span>' if r.get("historical") else ""
+    tr_class = ' class="historical"' if r.get("historical") else ""
+    pr_cell = ""
+    pr_url = r.get("pr_url")
+    if pr_url and URL_RE.match(pr_url):
+        safe_pr = html.escape(pr_url, quote=True)
+        pr_cell = f'<a href="{safe_pr}" target="_blank" rel="noopener noreferrer">PR</a>'
+    project = html.escape(r["project"], quote=True)
+    cells = {
+        "report": f'<a href="{html.escape(href, quote=True)}">{title_esc}{badge}</a>',
+        "project": f'<a href="{project}/index.html">{project}</a>',
+        "task": html.escape(r.get("task_id", "")),
+        "home": html.escape(r.get("home", "")),
+        "model": html.escape(r.get("model") or "unknown"),
+        "effort": html.escape(r.get("thinking_effort") or "unknown"),
+        "date": html.escape(r.get("updated") or "unknown"),
+        "intent": html.escape(r.get("intent") or "unknown"),
+        "pr": pr_cell,
+    }
+    tds = "".join(f"<td>{cells[c]}</td>" for c in columns)
+    return f"<tr{tr_class}>{tds}</tr>"
+
+
+def project_index_html(project_slug: str, reports: list[dict]) -> str:
+    safe_proj = html.escape(project_slug)
+    tbody_html = "\n".join(
+        report_row_html(r, os.path.basename(r["html_path"]), PROJECT_COLUMNS)
+        for r in reports
+    )
+    count = len(reports)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{safe_proj} reports</title>
+<style>{INDEX_CSS}</style>
+</head><body>
+<p class="nav-bar"><a href="../index.html">&larr; Back to all reports</a></p>
+<h1>{safe_proj} reports</h1>
+<p>{count} report(s). Local machine only.</p>
+<input id="q" type="search" placeholder="Filter {safe_proj} reports&hellip;">
+<table class="catalog" id="catalog">
+<thead><tr><th>Report</th><th>Task</th><th>Home</th><th>Model used</th><th>Thinking effort</th><th>Date</th><th>Captain's intent</th><th>PR</th></tr></thead>
+<tbody>
+{tbody_html}
+</tbody>
+</table>
+<script>{INDEX_JS}</script>
+</body></html>
+"""
+
+
+def root_index_html(
+    reports: list[dict],
+    projects: list[str],
+    unavailable: list[dict],
+    limitations: list[str],
+) -> str:
     unavailable_html = ""
     if unavailable:
         items = "".join(
@@ -337,10 +387,22 @@ def index_html(generated: str, unavailable: list[dict], limitations: list[str]) 
         )
         unavailable_html = f"""<div class="unavailable"><strong>Some sources were unavailable this run:</strong>
 <ul>{items}</ul></div>"""
+
     limitations_html = ""
     if limitations:
         items = "".join(f"<li>{html.escape(x)}</li>" for x in limitations)
         limitations_html = f'<p class="limitations">Known limitations:</p><ul class="limitations">{items}</ul>'
+
+    proj_counts = collections.Counter(r.get("project") or "general" for r in reports)
+    sorted_projs = sorted(projects, key=lambda p: p.lower())
+    proj_links = " &middot; ".join(
+        f'<a href="{html.escape(p)}/index.html">{html.escape(p)} ({proj_counts[p]})</a>'
+        for p in sorted_projs
+    )
+    projects_nav = f'<nav class="projects-nav"><strong>Projects:</strong> {proj_links}</nav>' if sorted_projs else ""
+
+    tbody_html = "\n".join(report_row_html(r, r["html_path"], ROOT_COLUMNS) for r in reports)
+    count = len(reports)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -349,12 +411,15 @@ def index_html(generated: str, unavailable: list[dict], limitations: list[str]) 
 <style>{INDEX_CSS}</style>
 </head><body>
 <h1>Firstmate report catalog</h1>
-<p>Generated {html.escape(generated)}. Local machine only.</p>
+<p>{count} report(s). Local machine only.</p>
 {unavailable_html}
+{projects_nav}
 <input id="q" type="search" placeholder="Search by title, project, home, or task id&hellip;">
 <table class="catalog" id="catalog">
-<thead><tr><th>Report</th><th>Home</th><th>Project</th><th>Task</th><th>Updated</th><th>PR</th></tr></thead>
-<tbody></tbody>
+<thead><tr><th>Report</th><th>Project</th><th>Task</th><th>Home</th><th>Updated</th><th>PR</th></tr></thead>
+<tbody>
+{tbody_html}
+</tbody>
 </table>
 {limitations_html}
 <script>{INDEX_JS}</script>
@@ -370,6 +435,17 @@ def write_file(path: str, content: str) -> None:
     os.replace(tmp, path)
 
 
+def migrate_page_links(page: str, old_path: str) -> str:
+    if old_path.startswith("reports/"):
+        return page.replace('href="../../../index.html"', 'href="../index.html"')
+    if len(old_path.split("/")) < 3:
+        return page
+    root_link = 'href="../../index.html"'
+    page = page.replace(root_link, 'href="__REPORT_ROOT_INDEX__"')
+    page = page.replace('href="../index.html"', 'href="index.html"')
+    return page.replace('href="__REPORT_ROOT_INDEX__"', 'href="../index.html"')
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: fm-reports-render.py <publish-root> < manifest.json", file=sys.stderr)
@@ -380,10 +456,43 @@ def main() -> int:
         print("fm-reports-render: unsupported manifest schema", file=sys.stderr)
         return 1
 
-    generated = manifest.get("generated") or datetime.now(timezone.utc).isoformat()
-    catalog_rows: list[dict] = []
     skipped: list[str] = []
+    persisted_reports: dict[tuple[str, str, str], dict] = {}
+    old_projects: set[str] = set()
 
+    os.makedirs(publish_root, exist_ok=True)
+
+    # 1. Load existing reports from catalog.json if present
+    catalog_path = os.path.join(publish_root, "catalog.json")
+    if os.path.isfile(catalog_path):
+        try:
+            with open(catalog_path, "r", encoding="utf-8") as fh:
+                old_catalog = json.load(fh)
+            for r in old_catalog.get("reports", []):
+                proj = normalize_project_slug(r.get("project"))
+                task_id = r.get("task_id", "")
+                html_path = r.get("html_path", "")
+                if not task_id or not SAFE_ID_RE.match(task_id):
+                    continue
+
+                old_full = os.path.join(publish_root, html_path)
+                if os.path.isfile(old_full):
+                    stem = r.get("stem") or os.path.splitext(os.path.basename(html_path))[0]
+                    home_id = r.get("home_id") or r.get("home") or "unknown"
+                    with open(old_full, "r", encoding="utf-8") as fh:
+                        r["_source_html"] = fh.read()
+                    r["home_id"] = home_id
+                    r["stem"] = stem
+                    r["project"] = proj
+                    old_projects.add(proj)
+                    report_key = (task_id, stem, home_id)
+                    prior_paths = persisted_reports.get(report_key, {}).get("_source_paths", [])
+                    r["_source_paths"] = [*prior_paths, html_path]
+                    persisted_reports[report_key] = r
+        except Exception as exc:
+            print(f"fm-reports-render: warning: could not load existing catalog.json: {exc}", file=sys.stderr)
+
+    # 3. Process reports from current manifest
     for home in manifest.get("homes", []):
         home_id = home.get("id", "")
         home_label = home.get("label", home_id)
@@ -411,54 +520,111 @@ def main() -> int:
             with open(content_path, "r", encoding="utf-8", errors="replace") as fh:
                 raw = fh.read()
 
+            proj_slug = normalize_project_slug(report.get("project"))
+            home_id = home.get("id", "")
             title = report.get("title") or stem.replace("-", " ").replace("_", " ")
             body_html = render_markdown(raw)
             historical = bool(report.get("historical"))
+            pr_url = report.get("pr_url")
+            pr_url = pr_url if pr_url and URL_RE.match(pr_url) else None
+            intent = (report.get("intent") or "").strip() or None
+            model = report.get("model")
+            effort = report.get("thinking_effort")
             provenance = [
                 ("Home", html.escape(home_label)),
+                ("Project", f'<a href="index.html">{html.escape(proj_slug)}</a>'),
                 ("Task", html.escape(task_id)),
-                ("Source file", html.escape(report.get("display_path", filename))),
-                ("Last updated", html.escape(report.get("mtime", "unknown"))),
+                ("Date", html.escape(report.get("mtime", "unknown"))),
+                ("Model used", html.escape(model or "unknown")),
+                ("Thinking effort", html.escape(effort or "unknown")),
+                ("Captain's intent", html.escape(intent or "unknown")),
             ]
-            project = report.get("project")
-            if project:
-                provenance.append(("Project", html.escape(project)))
-            pr_url = report.get("pr_url")
-            if pr_url and URL_RE.match(pr_url):
+            if pr_url:
                 safe_pr = html.escape(pr_url, quote=True)
-                provenance.append(("Linked PR", f'<a href="{safe_pr}">{html.escape(pr_url)}</a>'))
+                provenance.append(("Linked PR", f'<a href="{safe_pr}" target="_blank" rel="noopener noreferrer">{html.escape(pr_url)}</a>'))
             backlog_state = report.get("backlog_state")
             if backlog_state:
                 provenance.append(("Backlog state", html.escape(backlog_state)))
 
-            rel_html_path = f"reports/{home_id}/{task_id}/{stem}.html"
-            out_path = os.path.join(publish_root, rel_html_path)
-            page = report_page_html(title, provenance, body_html, historical)
-            write_file(out_path, page)
+            report_key = (task_id, stem, home_id)
+            prior_report = persisted_reports.get(report_key, {})
+            current_report = {
+                "title": title,
+                "home": home_label,
+                "home_id": home_id,
+                "project": proj_slug,
+                "task_id": task_id,
+                "stem": stem,
+                "updated": report.get("mtime", "unknown"),
+                "pr_url": pr_url,
+                "historical": historical,
+                "intent": intent,
+                "model": model,
+                "thinking_effort": effort,
+                "_page_html": report_page_html(title, proj_slug, provenance, body_html, historical),
+            }
+            for field in ("_source_paths", "_source_html"):
+                if field in prior_report:
+                    current_report[field] = prior_report[field]
+            persisted_reports[report_key] = current_report
 
-            catalog_rows.append(
-                {
-                    "title": title,
-                    "home": home_label,
-                    "project": project,
-                    "task_id": task_id,
-                    "updated": report.get("mtime", "unknown"),
-                    "pr_url": pr_url if pr_url and URL_RE.match(pr_url) else None,
-                    "html_path": rel_html_path,
-                    "historical": historical,
-                }
-            )
+    home_ids_by_report: dict[tuple[str, str, str], set[str]] = collections.defaultdict(set)
+    for report in persisted_reports.values():
+        key = (report["project"], report["task_id"], report["stem"])
+        home_ids_by_report[key].add(report["home_id"])
 
-    catalog_rows.sort(key=lambda r: (r["historical"], r["updated"] or ""), reverse=False)
-    catalog_rows.sort(key=lambda r: r["updated"] or "", reverse=True)
+    for (task_id, stem, home_id), report in persisted_reports.items():
+        proj = report["project"]
+        filename = task_id
+        if stem != "report":
+            filename += f"__{stem}"
+        if len(home_ids_by_report[(proj, task_id, stem)]) > 1:
+            filename += f"__{home_id}"
+        rel_html_path = f"{proj}/{filename}.html"
+        report["html_path"] = rel_html_path
+        old_paths = report.pop("_source_paths", [])
+        page = report.pop("_page_html", None)
+        if page is None:
+            source_path = old_paths[-1] if old_paths else ""
+            page = migrate_page_links(report.pop("_source_html"), source_path)
+        else:
+            report.pop("_source_html", None)
+        write_file(os.path.join(publish_root, rel_html_path), page)
+        for old_path in old_paths:
+            if old_path != rel_html_path:
+                old_full_path = os.path.join(publish_root, old_path)
+                if os.path.isfile(old_full_path):
+                    os.unlink(old_full_path)
 
+    all_reports = sorted(
+        persisted_reports.values(),
+        key=lambda r: (not r.get("historical", False), r.get("updated") or ""),
+        reverse=True,
+    )
+
+    by_project: dict[str, list[dict]] = collections.defaultdict(list)
+    for r in all_reports:
+        by_project[r["project"]].append(r)
+
+    # Write project index pages
+    for proj_slug, proj_reports in by_project.items():
+        proj_index_path = os.path.join(publish_root, proj_slug, "index.html")
+        write_file(proj_index_path, project_index_html(proj_slug, proj_reports))
+    for proj_slug in old_projects - by_project.keys():
+        old_index_path = os.path.join(publish_root, proj_slug, "index.html")
+        if os.path.isfile(old_index_path):
+            os.unlink(old_index_path)
+
+    # Write root catalog.json
     write_file(
         os.path.join(publish_root, "catalog.json"),
-        json.dumps({"generated": generated, "reports": catalog_rows}, indent=2),
+        json.dumps({"reports": all_reports}, indent=2),
     )
+
+    # Write root index.html
     write_file(
         os.path.join(publish_root, "index.html"),
-        index_html(generated, manifest.get("unavailable", []), manifest.get("limitations", [])),
+        root_index_html(all_reports, list(by_project.keys()), manifest.get("unavailable", []), manifest.get("limitations", [])),
     )
 
     if skipped:
@@ -466,7 +632,7 @@ def main() -> int:
         for line in skipped:
             print(f"  {line}", file=sys.stderr)
 
-    print(f"fm-reports-render: wrote {len(catalog_rows)} report page(s) to {publish_root}")
+    print(f"fm-reports-render: wrote {len(all_reports)} report page(s) to {publish_root}")
     return 0
 
 

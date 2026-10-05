@@ -1122,13 +1122,20 @@ test_open_decision_surfaces_end_to_end() {
 }
 
 test_report_pointers_surface() {
-  local home fakebin json
+  local home fakebin json snapshot_json report_epoch
   home=$(make_home reports); write_fixture "$home"
   fakebin=$(make_fakebin "$home")
+  report_epoch=$(stat -c %Y "$home/data/scout-x/report.md" 2>/dev/null) \
+    || report_epoch=$(stat -f %m "$home/data/scout-x/report.md" 2>/dev/null)
   json=$(run "$home" "$fakebin" --json)
   printf '%s' "$json" | jq -e --arg p "$home/data/scout-x/report.md" '
     .reports | any(.[]; .id == "scout-x" and .path == $p)
   ' >/dev/null || fail "current scout report pointer must surface: $json"
+  snapshot_json=$(PATH="$fakebin:$PATH" FM_HOME="$home" \
+    "$ROOT/bin/fm-fleet-snapshot.sh" --json)
+  printf '%s' "$snapshot_json" | jq -e --argjson epoch "$report_epoch" '
+    .scout_reports | any(.[]; .id == "scout-x" and .mtime_epoch == $epoch)
+  ' >/dev/null || fail "scout report modification time must surface: $snapshot_json"
   pass "current report pointers surface"
 }
 

@@ -535,7 +535,7 @@ test_event_hints_follow_reconciled_current_state() {
 }
 
 test_scout_reports_include_teardown_reports() {
-  local home out
+  local home out reported_epoch untracked_epoch
   home=$(make_home teardown-reports)
   mkdir -p "$home/data/reported-scout" "$home/data/untracked-scout"
   cat > "$home/data/backlog.md" <<EOF
@@ -544,12 +544,17 @@ test_scout_reports_include_teardown_reports() {
 EOF
   printf '# Reported Scout\n' > "$home/data/reported-scout/report.md"
   printf '# Untracked Scout\n' > "$home/data/untracked-scout/report.md"
+  reported_epoch=$(stat -c %Y "$home/data/reported-scout/report.md" 2>/dev/null) \
+    || reported_epoch=$(stat -f %m "$home/data/reported-scout/report.md")
+  untracked_epoch=$(stat -c %Y "$home/data/untracked-scout/report.md" 2>/dev/null) \
+    || untracked_epoch=$(stat -f %m "$home/data/untracked-scout/report.md")
   out=$(FM_HOME="$home" "$SNAPSHOT" --json)
-  printf '%s' "$out" | jq -e --arg home "$home" '
+  printf '%s' "$out" | jq -e --arg home "$home" \
+    --argjson reported_epoch "$reported_epoch" --argjson untracked_epoch "$untracked_epoch" '
     (.tasks | length) == 0
       and .scout_reports == [
-        {id:"reported-scout",path:($home + "/data/reported-scout/report.md"),kind:"scout"},
-        {id:"untracked-scout",path:($home + "/data/untracked-scout/report.md"),kind:"scout"}
+        {id:"reported-scout",path:($home + "/data/reported-scout/report.md"),mtime_epoch:$reported_epoch,kind:"scout"},
+        {id:"untracked-scout",path:($home + "/data/untracked-scout/report.md"),mtime_epoch:$untracked_epoch,kind:"scout"}
       ]
   ' >/dev/null || fail "durable scout reports should remain visible after meta teardown"
   pass "snapshot includes durable scout reports after teardown"
