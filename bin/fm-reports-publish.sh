@@ -114,6 +114,12 @@ mtime_iso() {  # <path>
     || date -u -r "$epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null
 }
 
+epoch_iso() {  # <epoch>
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || printf 'unknown (remote)'
+}
+
 # Backlog context for one task id, read from an already-captured
 # fm-fleet-snapshot.sh --json file. Never a second parser: this only asks the
 # one authoritative snapshot for the fields it already extracted.
@@ -235,7 +241,7 @@ discover_remote_home() {  # <id> <label>
     return 0
   fi
 
-  local task_id base stem title project pr_url state model effort rc2
+  local task_id base stem title project pr_url state model effort intent mtime epoch brief_dest rc2
   while IFS=$'\t' read -r task_id; do
     [ -n "$task_id" ] || continue
     is_safe_component "$task_id" || continue
@@ -257,7 +263,17 @@ discover_remote_home() {  # <id> <label>
       model=$(meta_value "$meta_dest" model)
       effort=$(meta_value "$meta_dest" effort)
     fi
-    report_entry_json "$task_id" "$base" "$dest" "$title" "$project" "$pr_url" "$state" "unknown (remote)" false "" "$model" "$effort" \
+    brief_dest="$WORK_DIR/remote-$id-$task_id-brief.md"
+    intent="unknown (remote)"
+    if fm_run_timed "$REMOTE_TIMEOUT" "$FM_ROOT/bin/fm-on.sh" "$id" fm-remote-file.sh get \
+      "data/$task_id/brief.md" 65536 < /dev/null > "$brief_dest" 2>/dev/null; then
+      intent=$(captain_intent "$brief_dest")
+      [ -n "$intent" ] || intent="unknown (remote)"
+    fi
+    epoch=$(jq -r --arg id "$task_id" '.scout_reports[] | select(.id == $id) | .mtime_epoch // empty' "$snapshot_json" 2>/dev/null | head -1)
+    mtime="unknown (remote)"
+    case "$epoch" in *[!0-9]*|'') ;; *) mtime=$(epoch_iso "$epoch") ;; esac
+    report_entry_json "$task_id" "$base" "$dest" "$title" "$project" "$pr_url" "$state" "$mtime" false "$intent" "$model" "$effort" \
       >> "$reports_file"
   done < <(jq -r '.scout_reports[]?.id // empty' "$snapshot_json" 2>/dev/null)
 
@@ -267,6 +283,7 @@ discover_remote_home() {  # <id> <label>
 }
 
 do_publish() {
+  local owned_path
   discover_local_home main "main" "$FM_HOME"
 
   if [ -f "$REG" ] && [ ! -L "$REG" ]; then
@@ -306,6 +323,11 @@ do_publish() {
   fi
 
   local -a owned_paths=(index.html catalog.json)
+  if [ -f "$PUBLISH_ROOT/catalog.json" ]; then
+    while IFS= read -r owned_path; do
+      [ -n "$owned_path" ] && owned_paths+=("$owned_path")
+    done < <(jq -r '.reports[]?.html_path | select(type == "string") | select(test("^[A-Za-z0-9._/-]+\\.html$")) | select((split("/") | all(. != "" and . != "." and . != "..")))' "$PUBLISH_ROOT/catalog.json")
+  fi
   if [ ! -f "$PUBLISH_ROOT/.gitignore" ]; then
     cat > "$PUBLISH_ROOT/.gitignore" <<'EOF'
 # Temporary and editor files

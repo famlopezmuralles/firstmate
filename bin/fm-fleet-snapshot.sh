@@ -68,7 +68,8 @@
 #     endpoint.agent_alive is populated for local secondmates only, where it is
 #     useful return-channel supervision data; remote secondmates use "unknown"
 #     without a probe, and other tasks use "not_checked".
-#   scout_reports[]: present data/<id>/report.md pointers.
+#   scout_reports[]: present data/<id>/report.md pointers with mtime_epoch from
+#     the observed report file, or null when its timestamp is unavailable.
 #   main_inventory: {valid,reason,orphan_in_flight[],unstructured_current_count} -
 #     main-home current-inventory checks shared with secondmate_home_summary_json
 #     (orphan structured in-flight ids with no state/<id>.meta, and unstructured
@@ -1961,7 +1962,7 @@ secondmate_landed_from_current_json() {  # <secondmate-current-json-file> <outpu
 }
 
 scout_report_lines() {
-  local report id
+  local report id epoch
   if [ ! -d "$DATA" ]; then
     jq -n '[]'
     return 0
@@ -1970,7 +1971,9 @@ scout_report_lines() {
     | sort \
     | while IFS= read -r report; do
       id=$(basename "$(dirname "$report")")
-      jq -n --arg id "$id" --arg path "$report" '{id:$id,path:$path}'
+      epoch=$(file_mtime_epoch "$report")
+      jq -n --arg id "$id" --arg path "$report" --arg epoch "$epoch" \
+        '{id:$id,path:$path,mtime_epoch:(if ($epoch | test("^[0-9]+$")) then ($epoch | tonumber) else null end)}'
     done \
     | jq -s 'sort_by(.id)'
 }

@@ -6,7 +6,7 @@ Usage:
 
 Reads one "fm-reports-manifest.v1" JSON document on stdin (produced by
 bin/fm-reports-publish.sh) and writes, under <publish-root>:
-  <project>/<task-id>/<slug>.html  one sanitized page per report
+  <project>/<task-id>[-<stem>][--<home>].html  one sanitized page per report
   <project>/index.html             static project index page
   catalog.json                     the client-side dataset
   index.html                       static root catalog index
@@ -282,7 +282,7 @@ def report_page_html(
 <title>{safe_title}</title>
 <style>{PAGE_CSS}</style>
 </head><body>
-<p class="nav-bar"><a href="../index.html">&larr; Back to {safe_proj} reports</a> &middot; <a href="../../index.html">All reports</a></p>
+<p class="nav-bar"><a href="index.html">&larr; Back to {safe_proj} reports</a> &middot; <a href="../index.html">All reports</a></p>
 <h1>{safe_title}{badge}</h1>
 <header class="provenance"><dl>{rows}</dl></header>
 {body_html}
@@ -347,7 +347,7 @@ def report_row_html(r: dict, href: str, columns: list[str]) -> str:
 def project_index_html(project_slug: str, reports: list[dict]) -> str:
     safe_proj = html.escape(project_slug)
     tbody_html = "\n".join(
-        report_row_html(r, f"{r['task_id']}/{os.path.basename(r['html_path'])}", PROJECT_COLUMNS)
+        report_row_html(r, os.path.basename(r["html_path"]), PROJECT_COLUMNS)
         for r in reports
     )
     count = len(reports)
@@ -435,6 +435,17 @@ def write_file(path: str, content: str) -> None:
     os.replace(tmp, path)
 
 
+def migrate_page_links(page: str, old_path: str) -> str:
+    if old_path.startswith("reports/"):
+        return page.replace('href="../../../index.html"', 'href="../index.html"')
+    if len(old_path.split("/")) < 3:
+        return page
+    root_link = 'href="../../index.html"'
+    page = page.replace(root_link, 'href="__REPORT_ROOT_INDEX__"')
+    page = page.replace('href="../index.html"', 'href="index.html"')
+    return page.replace('href="__REPORT_ROOT_INDEX__"', 'href="../index.html"')
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: fm-reports-render.py <publish-root> < manifest.json", file=sys.stderr)
@@ -446,7 +457,7 @@ def main() -> int:
         return 1
 
     skipped: list[str] = []
-    persisted_reports: dict[tuple[str, str, str], dict] = {}
+    persisted_reports: dict[tuple[str, str, str, str], dict] = {}
 
     os.makedirs(publish_root, exist_ok=True)
 
@@ -463,23 +474,17 @@ def main() -> int:
                 if not task_id or not SAFE_ID_RE.match(task_id):
                     continue
 
-                # Migrate from legacy reports/<home>/<task_id>/<stem>.html if present
                 old_full = os.path.join(publish_root, html_path)
-                if html_path.startswith("reports/") and os.path.isfile(old_full):
-                    stem = os.path.splitext(os.path.basename(html_path))[0]
-                    new_rel = f"{proj}/{task_id}/{stem}.html"
-                    new_full = os.path.join(publish_root, new_rel)
-                    if not os.path.isfile(new_full):
-                        with open(old_full, "r", encoding="utf-8") as fh:
-                            legacy_page = fh.read()
-                        write_file(new_full, legacy_page.replace('href="../../../index.html"', 'href="../../index.html"'))
-                    html_path = new_rel
-                    r["html_path"] = new_rel
-
-                if os.path.isfile(os.path.join(publish_root, html_path)):
-                    stem = os.path.splitext(os.path.basename(html_path))[0]
+                if os.path.isfile(old_full):
+                    stem = r.get("stem") or os.path.splitext(os.path.basename(html_path))[0]
+                    home_id = r.get("home_id") or r.get("home") or "unknown"
+                    with open(old_full, "r", encoding="utf-8") as fh:
+                        r["_source_html"] = fh.read()
+                    r["_source_path"] = html_path
+                    r["home_id"] = home_id
+                    r["stem"] = stem
                     r["project"] = proj
-                    persisted_reports[(proj, task_id, stem)] = r
+                    persisted_reports[(proj, task_id, stem, home_id)] = r
         except Exception as exc:
             print(f"fm-reports-render: warning: could not load existing catalog.json: {exc}", file=sys.stderr)
 
@@ -512,6 +517,7 @@ def main() -> int:
                 raw = fh.read()
 
             proj_slug = normalize_project_slug(report.get("project"))
+            home_id = home.get("id", "")
             title = report.get("title") or stem.replace("-", " ").replace("_", " ")
             body_html = render_markdown(raw)
             historical = bool(report.get("historical"))
@@ -522,7 +528,7 @@ def main() -> int:
             effort = report.get("thinking_effort")
             provenance = [
                 ("Home", html.escape(home_label)),
-                ("Project", f'<a href="../index.html">{html.escape(proj_slug)}</a>'),
+                ("Project", f'<a href="index.html">{html.escape(proj_slug)}</a>'),
                 ("Task", html.escape(task_id)),
                 ("Date", html.escape(report.get("mtime", "unknown"))),
                 ("Model used", html.escape(model or "unknown")),
@@ -536,25 +542,49 @@ def main() -> int:
             if backlog_state:
                 provenance.append(("Backlog state", html.escape(backlog_state)))
 
-            rel_html_path = f"{proj_slug}/{task_id}/{stem}.html"
-            write_file(
-                os.path.join(publish_root, rel_html_path),
-                report_page_html(title, proj_slug, provenance, body_html, historical),
-            )
-
-            persisted_reports[(proj_slug, task_id, stem)] = {
+            report_key = (proj_slug, task_id, stem, home_id)
+            prior_report = persisted_reports.get(report_key, {})
+            current_report = {
                 "title": title,
                 "home": home_label,
+                "home_id": home_id,
                 "project": proj_slug,
                 "task_id": task_id,
+                "stem": stem,
                 "updated": report.get("mtime", "unknown"),
                 "pr_url": pr_url,
-                "html_path": rel_html_path,
                 "historical": historical,
                 "intent": intent,
                 "model": model,
                 "thinking_effort": effort,
+                "_page_html": report_page_html(title, proj_slug, provenance, body_html, historical),
             }
+            for field in ("_source_path", "_source_html"):
+                if field in prior_report:
+                    current_report[field] = prior_report[field]
+            persisted_reports[report_key] = current_report
+
+    home_ids_by_task: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
+    for proj, task_id, _stem, home_id in persisted_reports:
+        home_ids_by_task[(proj, task_id)].add(home_id)
+
+    for (proj, task_id, stem, home_id), report in persisted_reports.items():
+        filename = task_id
+        if stem != "report":
+            filename += f"-{stem}"
+        if len(home_ids_by_task[(proj, task_id)]) > 1:
+            filename += f"--{home_id}"
+        rel_html_path = f"{proj}/{filename}.html"
+        report["html_path"] = rel_html_path
+        old_path = report.pop("_source_path", None)
+        page = report.pop("_page_html", None)
+        if page is None:
+            page = migrate_page_links(report.pop("_source_html"), old_path or "")
+        else:
+            report.pop("_source_html", None)
+        write_file(os.path.join(publish_root, rel_html_path), page)
+        if old_path and old_path != rel_html_path:
+            os.unlink(os.path.join(publish_root, old_path))
 
     all_reports = sorted(
         persisted_reports.values(),

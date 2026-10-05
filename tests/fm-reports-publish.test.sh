@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Tests for bin/fm-reports-publish.sh and bin/fm-reports-render.py: the
 # central report catalog must organize published reports by project (1:1 with
-# diffs-explained, with general fallback), persist source markdown alongside
-# rendered HTML only, preserve existing published reports across worktree pruning,
+# diffs-explained, with general fallback), persist rendered HTML only, preserve
+# existing published reports across worktree pruning,
 # initialize the publish root as a Git repository and commit only when reports change,
 # carry the captain's intent in each report's provenance, migrate legacy pages,
 # provide static project and root index pages without client-side fetching,
@@ -100,13 +100,13 @@ test_report_candidate_included_with_backlog_context() {
     "task model should come from state metadata"
   assert_contains "$(catalog_json "$root")" '"thinking_effort": "high"' \
     "task effort should come from state metadata"
-  assert_contains "$(catalog_json "$root")" '"html_path": "demo-repo/task-good/report.html"' \
+  assert_contains "$(catalog_json "$root")" '"html_path": "demo-repo/task-good.html"' \
     "task-good should be published under demo-repo"
-  [ -f "$root/publish/demo-repo/task-good/report.html" ] \
+  [ -f "$root/publish/demo-repo/task-good.html" ] \
     || fail "task-good/report.html should be written under demo-repo"
   [ -f "$root/publish/demo-repo/index.html" ] \
     || fail "demo-repo/index.html project index should be generated"
-  assert_contains "$(cat "$root/publish/demo-repo/task-good/report.html")" 'Model used</dt><dd>gpt-6-sol' \
+  assert_contains "$(cat "$root/publish/demo-repo/task-good.html")" 'Model used</dt><dd>gpt-6-sol' \
     "report provenance should include its model"
   assert_contains "$(cat "$root/publish/demo-repo/index.html")" 'gpt-6-sol' \
     "project index should include model provenance"
@@ -129,7 +129,8 @@ test_denylisted_files_never_published() {
   [ -z "$found" ] || fail "a denylisted file leaked into the catalog: $found"
 
   local html_count
-  html_count=$(find "$root/publish/demo-repo/task-good" -type f -name '*.html' | wc -l)
+  html_count=0
+  [ -f "$root/publish/demo-repo/task-good.html" ] && html_count=1
   assert_equals "1" "$html_count" \
     "only report.md should be published for task-good, not its brief/decision/steer siblings"
   pass "briefs, decisions, and steering notes are never published"
@@ -142,9 +143,9 @@ test_superseded_variant_marked_historical() {
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
   json=$(catalog_json "$root")
 
-  [ -f "$root/publish/demo-repo/task-super/report.html" ] \
+  [ -f "$root/publish/demo-repo/task-super.html" ] \
     || fail "the current report.html should still be published"
-  [ -f "$root/publish/demo-repo/task-super/prior-report.html" ] \
+  [ -f "$root/publish/demo-repo/task-super-prior-report.html" ] \
     || fail "the superseded prior-report.html should still be published, not hidden"
 
   assert_contains "$json" '"task_id": "task-super"' "task-super should be in the catalog"
@@ -168,7 +169,7 @@ for r in d['reports']:
 import json
 d = json.load(open('$root/publish/catalog.json'))
 for r in d['reports']:
-    if r['html_path'].endswith('/report.html') and r['task_id'] == 'task-super':
+    if r['html_path'].endswith('/task-super.html') and r['task_id'] == 'task-super':
         print(r['historical'])
 ")
   assert_equals "True" "$prior_hist" "prior-report.md must be marked historical"
@@ -181,7 +182,7 @@ test_report_content_is_sanitized() {
   root=$(fm_test_tmproot fm-reports-xss)
   make_fixture "$root"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
-  page=$(cat "$root/publish/demo-repo/task-xss/report.html")
+  page=$(cat "$root/publish/demo-repo/task-xss.html")
 
   assert_not_contains "$page" '<script>alert' \
     "a literal <script> tag in report content must never reach the rendered page"
@@ -198,9 +199,9 @@ test_symlinked_report_is_excluded() {
   make_fixture "$root"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
 
-  [ ! -e "$root/publish/demo-repo/task-link" ] \
+  [ ! -e "$root/publish/demo-repo/task-link.html" ] \
     || fail "a symlinked report.md must not be published"
-  [ ! -e "$root/publish/general/task-link" ] \
+  [ ! -e "$root/publish/general/task-link.html" ] \
     || fail "a symlinked report.md must not be published under general"
   assert_not_contains "$(catalog_json "$root")" 'task-link' \
     "task-link must not appear in the catalog"
@@ -218,11 +219,89 @@ test_registered_secondmate_is_aggregated() {
 
   assert_contains "$(catalog_json "$root")" '"task_id": "task-remote-sib"' \
     "the registered local secondmate home's report should be aggregated into the catalog"
-  [ -f "$root/publish/other-repo/task-remote-sib/report.html" ] \
+  [ -f "$root/publish/other-repo/task-remote-sib.html" ] \
     || fail "the secondmate's report page should be written under its project directory"
   [ -f "$root/publish/other-repo/index.html" ] \
     || fail "other-repo project index should be generated"
   pass "a registered local secondmate home's reports are aggregated by project"
+}
+
+test_cross_home_report_collision() {
+  local root
+  root=$(fm_test_tmproot fm-reports-collision)
+  make_fixture "$root"
+  mkdir -p "$root/second/data/task-good"
+  printf '# Second home report\n\nsecond home marker\n' > "$root/second/data/task-good/report.md"
+  snapshot_stub "$root/second/bin/fm-fleet-snapshot.sh" '[
+    {"id":"task-remote-sib","structured":true,"title":"Sibling home task","repo":"other-repo","pr_url":"","state":"done"},
+    {"id":"task-good","structured":true,"title":"Good report task","repo":"demo-repo","pr_url":"","state":"done"}
+  ]'
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  [ -f "$root/publish/demo-repo/task-good--main.html" ] \
+    || fail "main report should receive a home-qualified filename"
+  [ -f "$root/publish/demo-repo/task-good--second.html" ] \
+    || fail "secondmate report should receive a home-qualified filename"
+  python3 - "$root/publish/catalog.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    reports = json.load(stream)["reports"]
+collisions = [row for row in reports if row["task_id"] == "task-good"]
+if len(collisions) != 2 or {row["home_id"] for row in collisions} != {"main", "second"}:
+    raise SystemExit(f"both home reports must remain in the catalog: {collisions}")
+PY
+  rm -rf "$root/second/data/task-good"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish after secondmate prune failed: $(cat "$root/stderr")"
+  [ -f "$root/publish/demo-repo/task-good--main.html" ] \
+    && [ -f "$root/publish/demo-repo/task-good--second.html" ] \
+    || fail "both collision-qualified reports must persist after source pruning"
+  pass "same-project reports from different homes remain separately published"
+}
+
+test_remote_report_provenance() {
+  local root remote
+  root=$(fm_test_tmproot fm-reports-remote-provenance)
+  make_fixture "$root"
+  remote="$root/remote"
+  mkdir -p "$remote/data/task-remote" "$remote/state" "$root/main/bin"
+  printf '# Remote report\n\nremote body\n' > "$remote/data/task-remote/report.md"
+  printf '%s\n' '# Brief' '' "## Captain's intent" '' 'REMOTE_INTENT_MARKER' \
+    > "$remote/data/task-remote/brief.md"
+  printf 'model=gpt-remote\neffort=high\n' > "$remote/state/task-remote.meta"
+  cat > "$root/remote-snapshot.json" <<'JSON'
+{"schema":"fm-fleet-snapshot.v1","backlog":{"records":[{"id":"task-remote","structured":true,"title":"Remote report","repo":"remote-repo","pr_url":"","state":"done"}]},"scout_reports":[{"id":"task-remote","mtime_epoch":1760000000}]}
+JSON
+  cat > "$root/main/bin/fm-on.sh" <<EOF
+#!/usr/bin/env bash
+case "\$2" in
+  fm-fleet-snapshot.sh) cat "$root/remote-snapshot.json" ;;
+  fm-remote-file.sh) cat "$remote/\$4" ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$root/main/bin/fm-on.sh"
+  printf '%s\n' '- remote - Remote fixture. (host: fixture-remote; root: /remote/root; home: /remote/home; scope: testing; projects: none; added 2026-01-01)' \
+    > "$root/main/data/secondmates.md"
+  FM_ROOT_OVERRIDE="$root/main" FM_HOME="$root/main" \
+    FM_REPORTS_PUBLISH_ROOT="$root/publish" "$PUBLISH" publish \
+    >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  python3 - "$root/publish/catalog.json" "$root/publish/remote-repo/task-remote.html" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    row = next(item for item in json.load(stream)["reports"] if item["task_id"] == "task-remote")
+if row["updated"] != "2025-10-09T08:53:20Z" or row["intent"] != "REMOTE_INTENT_MARKER":
+    raise SystemExit(f"remote date and captain intent must be carried through: {row}")
+with open(sys.argv[2], encoding="utf-8") as stream:
+    page = stream.read()
+if "REMOTE_INTENT_MARKER" not in page or "gpt-remote" not in page or "high" not in page:
+    raise SystemExit("remote page provenance is incomplete")
+PY
+  pass "remote report provenance includes its observed date and captain intent"
 }
 
 test_unreachable_remote_is_disclosed_not_silently_empty() {
@@ -245,7 +324,7 @@ test_unknown_project_falls_back_to_general() {
   make_fixture "$root"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
 
-  [ -f "$root/publish/general/task-orphan/report.html" ] \
+  [ -f "$root/publish/general/task-orphan.html" ] \
     || fail "orphan task should be published under general"
   [ ! -e "$root/task-orphan" ] || fail "a dot project slug must not escape the publish root"
   [ -f "$root/publish/general/index.html" ] \
@@ -261,7 +340,7 @@ test_persistence_when_worktree_pruned() {
   make_fixture "$root"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "first publish failed: $(cat "$root/stderr")"
 
-  [ -f "$root/publish/demo-repo/task-good/report.html" ] \
+  [ -f "$root/publish/demo-repo/task-good.html" ] \
     || fail "report.html should exist before prune"
 
   # Simulate worktree pruning: remove task-good from source data directory
@@ -270,7 +349,7 @@ test_persistence_when_worktree_pruned() {
   # Run publish again
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "second publish failed: $(cat "$root/stderr")"
 
-  [ -f "$root/publish/demo-repo/task-good/report.html" ] \
+  [ -f "$root/publish/demo-repo/task-good.html" ] \
     || fail "report.html must be preserved after source data is pruned"
   assert_contains "$(catalog_json "$root")" '"task_id": "task-good"' \
     "task-good must remain in catalog.json after source prune"
@@ -313,7 +392,7 @@ test_refresh_commits_only_when_reports_change() {
   assert_equals "$before" "$after" "a routine refresh with no report changes must not create a commit"
 
   printf 'unrelated root data\n' > "$root/publish/notes.txt"
-  printf 'unrelated nested data\n' > "$root/publish/demo-repo/task-good/notes.txt"
+  printf 'unrelated project data\n' > "$root/publish/demo-repo/notes.txt"
   git -C "$root/publish" add notes.txt
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "refresh with unrelated staged file failed: $(cat "$root/stderr")"
   after=$(git -C "$root/publish" rev-list --count HEAD)
@@ -336,7 +415,7 @@ test_provenance_carries_intent_and_hides_ephemeral_paths() {
   root=$(fm_test_tmproot fm-reports-provenance)
   make_fixture "$root"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
-  page=$(cat "$root/publish/demo-repo/task-super/report.html")
+  page=$(cat "$root/publish/demo-repo/task-super.html")
 
   assert_contains "$page" "INTENT_MARKER_42" \
     "the captain's intent from the task brief must appear in the provenance header"
@@ -353,17 +432,30 @@ test_legacy_pages_migrate_with_root_back_link() {
   mkdir -p "$root/publish/reports/main/task-legacy"
   printf '<p><a href="../../../index.html">&larr; Back to report catalog</a></p>\n' \
     > "$root/publish/reports/main/task-legacy/report.html"
-  printf '{"reports":[{"title":"Legacy","home":"main","task_id":"task-legacy","html_path":"reports/main/task-legacy/report.html","updated":"2026-01-01T00:00:00Z","historical":false}]}' \
+  mkdir -p "$root/publish/demo-repo/task-old"
+  printf '<a href="../index.html">Project</a><a href="../../index.html">All reports</a><dd><a href="../index.html">demo-repo</a>\n' \
+    > "$root/publish/demo-repo/task-old/report.html"
+  printf '{"reports":[{"title":"Legacy","home":"main","task_id":"task-legacy","html_path":"reports/main/task-legacy/report.html","updated":"2026-01-01T00:00:00Z","historical":false},{"title":"Old layout","home":"main","project":"demo-repo","task_id":"task-old","html_path":"demo-repo/task-old/report.html","updated":"2026-01-01T00:00:00Z","historical":false}]}' \
     > "$root/publish/catalog.json"
 
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
-  page=$(cat "$root/publish/general/task-legacy/report.html")
+  page=$(cat "$root/publish/general/task-legacy.html")
+  [ ! -e "$root/publish/reports/main/task-legacy/report.html" ] \
+    || fail "the previous nested report page should be moved into the flat project layout"
+  [ -f "$root/publish/demo-repo/task-old.html" ] \
+    || fail "a previously published task page should migrate to the flat project layout"
+  [ ! -e "$root/publish/demo-repo/task-old/report.html" ] \
+    || fail "the old task subdirectory should be removed after migration"
+  assert_contains "$(cat "$root/publish/demo-repo/task-old.html")" 'href="index.html">Project' \
+    "migrated pages must keep project navigation pointed at the project index"
+  assert_contains "$(cat "$root/publish/demo-repo/task-old.html")" 'href="../index.html">All reports' \
+    "migrated pages must keep root navigation pointed at the root index"
 
-  assert_contains "$page" 'href="../../index.html"' \
+  assert_contains "$page" 'href="../index.html"' \
     "a migrated legacy page must link back to the publish root from its new location"
   assert_not_contains "$page" '../../../index.html' \
     "the legacy back link must not resolve outside the publish root"
-  assert_contains "$(catalog_json "$root")" '"html_path": "general/task-legacy/report.html"' \
+  assert_contains "$(catalog_json "$root")" '"html_path": "general/task-legacy.html"' \
     "the migrated legacy report must be recorded at its new path"
   pass "legacy reports migrate into the project layout with a working back link"
 }
@@ -379,13 +471,13 @@ test_static_navigation_without_client_side_fetch() {
 
   assert_contains "$index_content" 'Good report task' \
     "root index.html must contain static report table row"
-  assert_contains "$index_content" 'demo-repo/task-good/report.html' \
+  assert_contains "$index_content" 'demo-repo/task-good.html' \
     "root index.html must link to report page"
   assert_contains "$index_content" 'demo-repo/index.html' \
     "root index.html must link to project index"
   assert_not_contains "$index_content" "fetch('catalog.json')" \
     "root index.html must not rely on fragile client-side fetching"
-  python3 - "$root/publish/demo-repo/task-good/report.html" <<'PY'
+  python3 - "$root/publish/demo-repo/task-good.html" <<'PY'
 from html.parser import HTMLParser
 import posixpath
 import sys
@@ -399,7 +491,7 @@ class Links(HTMLParser):
         if tag == "a":
             self.hrefs.append(dict(attrs).get("href"))
 
-page_dir = "demo-repo/task-good"
+page_dir = "demo-repo"
 parser = Links()
 parser.feed(open(sys.argv[1], encoding="utf-8").read())
 targets = [posixpath.normpath(posixpath.join(page_dir, href)) for href in parser.hrefs]
@@ -411,7 +503,7 @@ PY
 
   assert_contains "$project_index" 'Good report task' \
     "project index must contain report row"
-  assert_contains "$project_index" 'task-good/report.html' \
+  assert_contains "$project_index" 'task-good.html' \
     "project index must link to report html"
   assert_contains "$project_index" '../index.html' \
     "project index must link back to root catalog"
@@ -424,6 +516,8 @@ test_superseded_variant_marked_historical
 test_report_content_is_sanitized
 test_symlinked_report_is_excluded
 test_registered_secondmate_is_aggregated
+test_cross_home_report_collision
+test_remote_report_provenance
 test_unreachable_remote_is_disclosed_not_silently_empty
 test_unknown_project_falls_back_to_general
 test_persistence_when_worktree_pruned

@@ -5,11 +5,13 @@ Published reports are organized by project under `<publish-root>/<project>/...` 
 
 ## Persistence and decoupling from ephemeral worktrees
 
-Only the sanitized HTML page for each report is persisted, under `<publish-root>/<project>/<task>/`; raw markdown is never copied into the publish root.
+Only the sanitized HTML page for each report is persisted, directly under `<publish-root>/<project>/<task>.html` or `<task>-<stem>.html` for supplemental reports; raw markdown is never copied into the publish root.
+When different homes report the same task in the same project, the filename includes `--<home>` so neither report overwrites the other.
 Existing published reports are preserved on subsequent runs so that cleaning or pruning ephemeral `.treehouse` worktrees does not wipe them out.
 Each page's provenance header shows the canonical project and task, the home, the date, the model used, the thinking effort, and the captain's intent (the `## Captain's intent` section of the task brief).
 Model and thinking effort show `unknown` until a source records them.
-Remote reports fetched over registered SSH routes are likewise persisted locally in the publish root.
+Remote report dates come from the report's observed file modification time in the remote fleet snapshot, and the captain's intent is fetched from the remote brief when available.
+If the brief or date is unavailable, its provenance value says `unknown (remote)`.
 
 ## Git repository integration
 
@@ -25,7 +27,7 @@ This layout works cleanly with Apache directory indexing (`Options Indexes`) as 
 
 ## What is included
 
-A report candidate is any `*.md` file directly inside a home's `data/<task>/` directory, except a fixed deny-list (briefs, launch instructions, captain-hold decision records, and firstmate-authored steering notes: `brief.md`, `launch-brief.md`, `brief-*.md`, `decision.md`, `review-decision.md`, `ship-instructions.md`, `task-note.md`, `intake.md`, `steer-*.md`), and except a symlink.
+A report candidate is any `*.md` file directly inside a local home's `data/<task>/` directory, except a fixed deny-list (briefs, launch instructions, captain-hold decision records, and firstmate-authored steering notes: `brief.md`, `launch-brief.md`, `brief-*.md`, `decision.md`, `review-decision.md`, `ship-instructions.md`, `task-note.md`, `intake.md`, `steer-*.md`), and except a symlink.
 This means a supplemental file such as `cd-verification.md` is published alongside the literal `report.md` for the same task.
 
 A filename containing `prior` or `before` is still published, but marked historical in the catalog rather than presented as the current report.
