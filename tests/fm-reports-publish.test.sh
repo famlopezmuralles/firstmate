@@ -385,6 +385,29 @@ test_static_navigation_without_client_side_fetch() {
     "root index.html must link to project index"
   assert_not_contains "$index_content" "fetch('catalog.json')" \
     "root index.html must not rely on fragile client-side fetching"
+  python3 - "$root/publish/demo-repo/task-good/report.html" <<'PY'
+from html.parser import HTMLParser
+import posixpath
+import sys
+
+class Links(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hrefs = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self.hrefs.append(dict(attrs).get("href"))
+
+page_dir = "demo-repo/task-good"
+parser = Links()
+parser.feed(open(sys.argv[1], encoding="utf-8").read())
+targets = [posixpath.normpath(posixpath.join(page_dir, href)) for href in parser.hrefs]
+if targets[:2] != ["demo-repo/index.html", "index.html"]:
+    raise SystemExit(f"report navigation targets are incorrect: {targets[:2]}")
+if targets[2] != "demo-repo/index.html":
+    raise SystemExit(f"project provenance target is incorrect: {targets[2]}")
+PY
 
   assert_contains "$project_index" 'Good report task' \
     "project index must contain report row"
