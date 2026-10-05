@@ -145,7 +145,7 @@ test_superseded_variant_marked_historical() {
 
   [ -f "$root/publish/demo-repo/task-super.html" ] \
     || fail "the current report.html should still be published"
-  [ -f "$root/publish/demo-repo/task-super-prior-report.html" ] \
+  [ -f "$root/publish/demo-repo/task-super__prior-report.html" ] \
     || fail "the superseded prior-report.html should still be published, not hidden"
 
   assert_contains "$json" '"task_id": "task-super"' "task-super should be in the catalog"
@@ -232,16 +232,22 @@ test_cross_home_report_collision() {
   make_fixture "$root"
   mkdir -p "$root/second/data/task-good"
   printf '# Second home report\n\nsecond home marker\n' > "$root/second/data/task-good/report.md"
+  printf '# Main supplemental\n\nmain supplemental marker\n' > "$root/main/data/task-good/prior-report.md"
+  printf '# Second supplemental\n\nsecond supplemental marker\n' > "$root/second/data/task-good/prior-report.md"
   snapshot_stub "$root/second/bin/fm-fleet-snapshot.sh" '[
     {"id":"task-remote-sib","structured":true,"title":"Sibling home task","repo":"other-repo","pr_url":"","state":"done"},
     {"id":"task-good","structured":true,"title":"Good report task","repo":"demo-repo","pr_url":"","state":"done"}
   ]'
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
 
-  [ -f "$root/publish/demo-repo/task-good--main.html" ] \
+  [ -f "$root/publish/demo-repo/task-good__main.html" ] \
     || fail "main report should receive a home-qualified filename"
-  [ -f "$root/publish/demo-repo/task-good--second.html" ] \
+  [ -f "$root/publish/demo-repo/task-good__second.html" ] \
     || fail "secondmate report should receive a home-qualified filename"
+  [ -f "$root/publish/demo-repo/task-good__prior-report__main.html" ] \
+    || fail "main supplemental report should receive stem and home qualifiers"
+  [ -f "$root/publish/demo-repo/task-good__prior-report__second.html" ] \
+    || fail "secondmate supplemental report should receive stem and home qualifiers"
   python3 - "$root/publish/catalog.json" <<'PY'
 import json
 import sys
@@ -249,15 +255,96 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as stream:
     reports = json.load(stream)["reports"]
 collisions = [row for row in reports if row["task_id"] == "task-good"]
-if len(collisions) != 2 or {row["home_id"] for row in collisions} != {"main", "second"}:
+paths = {(row["home_id"], row["stem"]): row["html_path"] for row in collisions}
+expected = {
+    ("main", "report"): "demo-repo/task-good__main.html",
+    ("second", "report"): "demo-repo/task-good__second.html",
+    ("main", "prior-report"): "demo-repo/task-good__prior-report__main.html",
+    ("second", "prior-report"): "demo-repo/task-good__prior-report__second.html",
+}
+if len(collisions) != 4 or paths != expected:
     raise SystemExit(f"both home reports must remain in the catalog: {collisions}")
 PY
   rm -rf "$root/second/data/task-good"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish after secondmate prune failed: $(cat "$root/stderr")"
-  [ -f "$root/publish/demo-repo/task-good--main.html" ] \
-    && [ -f "$root/publish/demo-repo/task-good--second.html" ] \
+  [ -f "$root/publish/demo-repo/task-good__main.html" ] \
+    && [ -f "$root/publish/demo-repo/task-good__second.html" ] \
     || fail "both collision-qualified reports must persist after source pruning"
+  [ -f "$root/publish/demo-repo/task-good__prior-report__main.html" ] \
+    && [ -f "$root/publish/demo-repo/task-good__prior-report__second.html" ] \
+    || fail "both collision-qualified supplemental reports must persist after pruning"
   pass "same-project reports from different homes remain separately published"
+}
+
+test_flattened_report_filenames_separate_task_and_stem() {
+  local root
+  root=$(fm_test_tmproot fm-reports-name-collision)
+  make_fixture "$root"
+  mkdir -p "$root/main/data/a" "$root/main/data/a-b"
+  printf '# Supplemental collision\n\nSUPPLEMENTAL-COLLISION-MARKER\n' \
+    > "$root/main/data/a/b.md"
+  printf '# Primary collision\n\nPRIMARY-COLLISION-MARKER\n' \
+    > "$root/main/data/a-b/report.md"
+  snapshot_stub "$root/main/bin/fm-fleet-snapshot.sh" '[
+    {"id":"task-good","structured":true,"title":"Good report task","repo":"demo-repo","pr_url":"","state":"done"},
+    {"id":"task-super","structured":true,"title":"Superseded task","repo":"demo-repo","pr_url":"","state":"done"},
+    {"id":"task-xss","structured":true,"title":"XSS task","repo":"demo-repo","pr_url":"","state":"in_flight"},
+    {"id":"task-orphan","structured":true,"title":"Orphan task","repo":"..","pr_url":"","state":"done"},
+    {"id":"a","structured":true,"title":"Supplemental collision task","repo":"demo-repo","pr_url":"","state":"done"},
+    {"id":"a-b","structured":true,"title":"Primary collision task","repo":"demo-repo","pr_url":"","state":"done"}
+  ]'
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  [ -f "$root/publish/demo-repo/a__b.html" ] \
+    || fail "supplemental report should use the task__stem filename"
+  [ -f "$root/publish/demo-repo/a-b.html" ] \
+    || fail "primary report should retain its task filename"
+  assert_contains "$(cat "$root/publish/demo-repo/a__b.html")" 'SUPPLEMENTAL-COLLISION-MARKER' \
+    "supplemental content should remain at its distinct path"
+  assert_contains "$(cat "$root/publish/demo-repo/a-b.html")" 'PRIMARY-COLLISION-MARKER' \
+    "primary content should remain at its distinct path"
+  pass "supplemental and primary reports use distinct flattened paths"
+}
+
+test_project_slugs_preserve_owner_namespaces() {
+  local root
+  root=$(fm_test_tmproot fm-reports-project-slugs)
+  make_fixture "$root"
+  mkdir -p "$root/main/data/task-org-a" "$root/main/data/task-org-b"
+  printf '# Owner A\n\nOWNER_A_MARKER\n' > "$root/main/data/task-org-a/report.md"
+  printf '# Owner B\n\nOWNER_B_MARKER\n' > "$root/main/data/task-org-b/report.md"
+  snapshot_stub "$root/main/bin/fm-fleet-snapshot.sh" '[
+    {"id":"task-org-a","structured":true,"title":"Owner A","repo":"org-a/repo","pr_url":"","state":"done"},
+    {"id":"task-org-b","structured":true,"title":"Owner B","repo":"org-b/repo","pr_url":"","state":"done"}
+  ]'
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  [ -f "$root/publish/org-a-repo/task-org-a.html" ] \
+    || fail "first owner/repository report should keep its namespace in the project path"
+  [ -f "$root/publish/org-b-repo/task-org-b.html" ] \
+    || fail "second owner/repository report should keep its namespace in the project path"
+  python3 - "$root/publish/catalog.json" <<'PY'
+import json
+import sys
+
+reports = json.load(open(sys.argv[1], encoding="utf-8"))["reports"]
+projects = {
+    report["task_id"]: report["project"]
+    for report in reports
+    if report["task_id"].startswith("task-org-")
+}
+if projects != {"task-org-a": "org-a-repo", "task-org-b": "org-b-repo"}:
+    raise SystemExit(f"catalog collapsed project namespaces: {projects}")
+PY
+  assert_contains "$(cat "$root/publish/org-a-repo/index.html")" 'Owner A' \
+    "first project index should contain only its report"
+  assert_not_contains "$(cat "$root/publish/org-a-repo/index.html")" 'Owner B' \
+    "first project index should not contain the other owner's report"
+  assert_contains "$(cat "$root/publish/org-b-repo/index.html")" 'Owner B' \
+    "second project index should contain only its report"
+  assert_not_contains "$(cat "$root/publish/org-b-repo/index.html")" 'Owner A' \
+    "second project index should not contain the other owner's report"
+  pass "project slugs preserve owner and repository namespaces"
 }
 
 test_remote_report_provenance() {
@@ -559,6 +646,8 @@ test_report_content_is_sanitized
 test_symlinked_report_is_excluded
 test_registered_secondmate_is_aggregated
 test_cross_home_report_collision
+test_flattened_report_filenames_separate_task_and_stem
+test_project_slugs_preserve_owner_namespaces
 test_remote_report_provenance
 test_unreachable_remote_is_disclosed_not_silently_empty
 test_unknown_project_falls_back_to_general

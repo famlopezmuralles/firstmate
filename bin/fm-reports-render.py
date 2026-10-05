@@ -6,7 +6,7 @@ Usage:
 
 Reads one "fm-reports-manifest.v1" JSON document on stdin (produced by
 bin/fm-reports-publish.sh) and writes, under <publish-root>:
-  <project>/<task-id>[-<stem>][--<home>].html  one sanitized page per report
+  <project>/<task-id>[__<stem>][__<home>].html  one sanitized page per report
   <project>/index.html             static project index page
   catalog.json                     the client-side dataset
   index.html                       static root catalog index
@@ -53,7 +53,7 @@ def safe_component(value: str) -> str:
 def normalize_project_slug(raw_project: str | None) -> str:
     if not raw_project:
         return "general"
-    p = raw_project.strip().split("/")[-1].lower()
+    p = raw_project.strip().lower().replace("/", "-")
     if p not in {".", ".."} and SAFE_ID_RE.match(p):
         return p
     return "general"
@@ -569,17 +569,18 @@ def main() -> int:
                     current_report[field] = prior_report[field]
             persisted_reports[report_key] = current_report
 
-    home_ids_by_task: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
+    home_ids_by_report: dict[tuple[str, str, str], set[str]] = collections.defaultdict(set)
     for report in persisted_reports.values():
-        home_ids_by_task[(report["project"], report["task_id"])].add(report["home_id"])
+        key = (report["project"], report["task_id"], report["stem"])
+        home_ids_by_report[key].add(report["home_id"])
 
     for (task_id, stem, home_id), report in persisted_reports.items():
         proj = report["project"]
         filename = task_id
         if stem != "report":
-            filename += f"-{stem}"
-        if len(home_ids_by_task[(proj, task_id)]) > 1:
-            filename += f"--{home_id}"
+            filename += f"__{stem}"
+        if len(home_ids_by_report[(proj, task_id, stem)]) > 1:
+            filename += f"__{home_id}"
         rel_html_path = f"{proj}/{filename}.html"
         report["html_path"] = rel_html_path
         old_paths = report.pop("_source_paths", [])
