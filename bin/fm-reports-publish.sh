@@ -305,6 +305,7 @@ do_publish() {
     git -C "$PUBLISH_ROOT" init -q || die "could not initialize git repository in $PUBLISH_ROOT"
   fi
 
+  local -a owned_paths=(index.html catalog.json)
   if [ ! -f "$PUBLISH_ROOT/.gitignore" ]; then
     cat > "$PUBLISH_ROOT/.gitignore" <<'EOF'
 # Temporary and editor files
@@ -314,18 +315,24 @@ do_publish() {
 .DS_Store
 *~
 EOF
+    owned_paths+=(.gitignore)
   fi
 
   python3 "$SCRIPT_DIR/fm-reports-render.py" "$PUBLISH_ROOT" < "$WORK_DIR/manifest.json"
 
-  git -C "$PUBLISH_ROOT" add -A
-  if ! git -C "$PUBLISH_ROOT" diff --cached --quiet; then
+  while IFS= read -r owned_path; do
+    [ -n "$owned_path" ] && owned_paths+=("$owned_path")
+  done < <(jq -r '.reports[] | .html_path, (.project + "/index.html")' "$PUBLISH_ROOT/catalog.json" | sort -u)
+
+  git -C "$PUBLISH_ROOT" add -A -- "${owned_paths[@]}"
+  if ! git -C "$PUBLISH_ROOT" diff --cached --quiet -- "${owned_paths[@]}"; then
     local commit_date
     commit_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     git -C "$PUBLISH_ROOT" \
       -c user.name="Firstmate" \
       -c user.email="firstmate@local" \
       commit -q -m "publish: refresh report catalog $commit_date" \
+      -- "${owned_paths[@]}" \
       || die "could not commit published reports in $PUBLISH_ROOT"
   fi
 }

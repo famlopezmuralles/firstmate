@@ -312,10 +312,22 @@ test_refresh_commits_only_when_reports_change() {
   after=$(git -C "$root/publish" rev-list --count HEAD)
   assert_equals "$before" "$after" "a routine refresh with no report changes must not create a commit"
 
+  printf 'unrelated root data\n' > "$root/publish/notes.txt"
+  printf 'unrelated nested data\n' > "$root/publish/demo-repo/task-good/notes.txt"
+  git -C "$root/publish" add notes.txt
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "refresh with unrelated staged file failed: $(cat "$root/stderr")"
+  after=$(git -C "$root/publish" rev-list --count HEAD)
+  assert_equals "$before" "$after" "unrelated staged files must not trigger a report commit"
+
   printf '# Good report\n\nEdited body.\n' > "$root/main/data/task-good/report.md"
   run_publish "$root" >/dev/null 2>"$root/stderr" || fail "changed publish failed: $(cat "$root/stderr")"
   after=$(git -C "$root/publish" rev-list --count HEAD)
   assert_equals "$((before + 1))" "$after" "a refresh that publishes a modified report must commit once"
+  local committed_files status
+  committed_files=$(git -C "$root/publish" diff-tree --no-commit-id --name-only -r HEAD)
+  case "$committed_files" in *notes.txt*) fail "unrelated files must not be committed: $committed_files" ;; esac
+  status=$(git -C "$root/publish" status --porcelain)
+  assert_contains "$status" 'notes.txt' "unrelated staged and untracked files must remain outside the publisher commit"
   pass "the publish root commits only when new or modified reports are published"
 }
 
