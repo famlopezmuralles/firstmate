@@ -539,6 +539,30 @@ test_refresh_commits_only_when_reports_change() {
   pass "the publish root commits only when new or modified reports are published"
 }
 
+test_prune_only_refresh_does_not_commit_or_leak_internal_keys() {
+  local root before after
+  root=$(fm_test_tmproot fm-reports-prune-nocommit)
+  make_fixture "$root"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "first publish failed: $(cat "$root/stderr")"
+  before=$(git -C "$root/publish" rev-list --count HEAD)
+
+  rm -rf "$root/main/data/task-good"
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "prune-only publish failed: $(cat "$root/stderr")"
+  after=$(git -C "$root/publish" rev-list --count HEAD)
+  assert_equals "$before" "$after" "a prune-only refresh with no new or modified report must not create a commit"
+
+  python3 - "$root/publish/catalog.json" <<'PY'
+import json
+import sys
+
+reports = json.load(open(sys.argv[1], encoding="utf-8"))["reports"]
+leaked = sorted({key for report in reports for key in report if key.startswith("_")})
+if leaked:
+    raise SystemExit(f"catalog.json leaks internal keys: {leaked}")
+PY
+  pass "a prune-only refresh neither commits nor leaks internal catalog keys"
+}
+
 test_provenance_carries_intent_and_hides_ephemeral_paths() {
   local root page
   root=$(fm_test_tmproot fm-reports-provenance)
@@ -655,6 +679,7 @@ test_persistence_when_worktree_pruned
 test_report_project_reassignment_updates_existing_identity
 test_git_repository_initialized_and_committed
 test_refresh_commits_only_when_reports_change
+test_prune_only_refresh_does_not_commit_or_leak_internal_keys
 test_provenance_carries_intent_and_hides_ephemeral_paths
 test_legacy_pages_migrate_with_root_back_link
 test_static_navigation_without_client_side_fetch

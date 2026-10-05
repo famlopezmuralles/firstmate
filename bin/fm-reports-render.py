@@ -481,7 +481,6 @@ def main() -> int:
                     home_id = r.get("home_id") or r.get("home") or "unknown"
                     with open(old_full, "r", encoding="utf-8") as fh:
                         r["_source_html"] = fh.read()
-                    r["_source_path"] = html_path
                     r["home_id"] = home_id
                     r["stem"] = stem
                     r["project"] = proj
