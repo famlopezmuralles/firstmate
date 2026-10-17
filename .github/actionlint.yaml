@@ -1,0 +1,6 @@
+self-hosted-runner:
+  # Labels of the casa-vm self-hosted runner.
+  # Without this, actionlint rejects the custom `casa-vm` label used by the
+  # Linux CI jobs (see .github/workflows/ci.yml and no-mistakes-required.yml).
+  labels:
+    - casa-vm
