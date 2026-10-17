@@ -382,6 +382,25 @@ test_pr_based_dod_draft_check_uses_gh_axi() {
   pass "PR-based DoD draft check uses gh-axi"
 }
 
+test_no_mistakes_skip_defaults() {
+  local github_out gerrit_out
+  github_out="$TMP_ROOT/dod-skip-github.md"
+  gerrit_out="$TMP_ROOT/dod-skip-gerrit.md"
+  fm_dod_block no-mistakes dod-skip-task > "$github_out"
+  fm_dod_block no-mistakes dod-skip-task fm/dod-skip-task gerrit > "$gerrit_out"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Every `no-mistakes axi run` for this task passes `--skip test,lint,document` (captain default), and skips nothing else; intent, rebase, review, push, pr and ci always run.' "$github_out" \
+    "github no-mistakes DoD must pass the captain-default skip on every run"
+  assert_no_grep '--skip push,pr,ci' "$github_out" \
+    "github no-mistakes DoD must not carry the gerrit skip rule"
+  # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
+  assert_grep 'Pass `--skip push,pr,ci` on every `no-mistakes axi run` for this task' "$gerrit_out" \
+    "gerrit no-mistakes DoD must keep its own skip rule"
+  assert_no_grep '--skip test,lint,document' "$gerrit_out" \
+    "gerrit no-mistakes DoD must not carry the captain-default skip"
+  pass "no-mistakes skip defaults split by forge"
+}
+
 test_scout_done_is_not_gated
 test_unpushed_ship_done_is_refused
 test_no_mistakes_prevalidation_done_is_not_gated
@@ -400,5 +419,6 @@ test_standalone_local_only_needs_project_ref
 test_non_done_lines_are_not_gated
 test_fenced_and_indented_captain_lines_are_not_intent
 test_pr_based_dod_draft_check_uses_gh_axi
+test_no_mistakes_skip_defaults
 
 echo "all fm-dod-lib tests passed"

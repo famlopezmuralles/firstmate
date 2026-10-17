@@ -440,6 +440,7 @@ The task is complete only when committed on your branch.
 When you believe it is complete, append \`done [at=<epoch>]: {summary}\` to the status file and stop.
 Firstmate will then instruct you to run /no-mistakes to validate and ship a PR.
 That first \`done:\` is the handoff that starts the pipeline, which owns the push; it is not a request to push from this copy.
+Every \`no-mistakes axi run\` for this task passes \`--skip test,lint,document\` (captain default), and skips nothing else; intent, rebase, review, push, pr and ci always run.
 
 EOF
       fm_nm_driving_block "$forge"
