@@ -1,0 +1,56 @@
+{
+  "generated_at": "2026-10-18T16:22:40.931638+00:00",
+  "projects": {
+    "repo-a": {
+      "commits": {
+        "added": 6,
+        "added_by": {
+          "Live Agent": 6
+        },
+        "by_author": {
+          "Live Agent": 2
+        },
+        "removed": 0,
+        "removed_by": {
+          "Live Agent": 0
+        },
+        "total": 2
+      },
+      "no_mistakes_runs": {
+        "total": 2
+      },
+      "prs": {
+        "by_author": {
+          "alice": 1,
+          "bob": 1
+        },
+        "total": 2
+      }
+    },
+    "repo-b": {
+      "commits": {
+        "added": 6,
+        "added_by": {
+          "Live Agent": 6
+        },
+        "by_author": {
+          "Live Agent": 2
+        },
+        "removed": 0,
+        "removed_by": {
+          "Live Agent": 0
+        },
+        "total": 2
+      },
+      "no_mistakes_runs": {
+        "total": 0
+      },
+      "prs": {
+        "by_author": {
+          "alice": 1
+        },
+        "total": 1
+      }
+    }
+  }
+}

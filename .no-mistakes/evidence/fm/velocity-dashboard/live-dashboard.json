@@ -1,0 +1,412 @@
+{
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/prs/"
+        }
+      },
+      "targets": [
+        {
+          "csvContent": "project,prs,commits,added,removed,runs\nrepo-a,2,2,6,0,2\nrepo-b,1,2,6,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "Pull requests",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "id": 2,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/commits/"
+        }
+      },
+      "targets": [
+        {
+          "csvContent": "project,prs,commits,added,removed,runs\nrepo-a,2,2,6,0,2\nrepo-b,1,2,6,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "Commits",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 3,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/added/"
+        }
+      },
+      "targets": [
+        {
+          "csvContent": "project,prs,commits,added,removed,runs\nrepo-a,2,2,6,0,2\nrepo-b,1,2,6,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "Lines added",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 4,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/removed/"
+        }
+      },
+      "targets": [
+        {
+          "csvContent": "project,prs,commits,added,removed,runs\nrepo-a,2,2,6,0,2\nrepo-b,1,2,6,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "Lines removed",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 5,
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ],
+          "fields": "/runs/"
+        }
+      },
+      "targets": [
+        {
+          "csvContent": "project,prs,commits,added,removed,runs\nrepo-a,2,2,6,0,2\nrepo-b,1,2,6,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "No-mistakes runs",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 6,
+      "targets": [
+        {
+          "csvContent": "project,prs,commits,added,removed,runs\nrepo-a,2,2,6,0,2\nrepo-b,1,2,6,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "Per project",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "id": 7,
+      "targets": [
+        {
+          "csvContent": "project,agent,prs,commits,added,removed\nrepo-a,Live Agent,0,2,6,0\nrepo-a,alice,1,0,0,0\nrepo-a,bob,1,0,0,0\nrepo-b,Live Agent,0,2,6,0\nrepo-b,alice,1,0,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "Per agent",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-testdata-datasource",
+        "uid": "testdata"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "id": 8,
+      "targets": [
+        {
+          "csvContent": "project,prs,commits,added,removed,runs\nrepo-a,2,2,6,0,2\nrepo-b,1,2,6,0,0",
+          "refId": "A",
+          "scenarioId": "csv_content"
+        }
+      ],
+      "title": "Commits per project",
+      "transformations": [
+        {
+          "id": "filterByValue",
+          "options": {
+            "filters": [
+              {
+                "config": {
+                  "id": "regex",
+                  "options": {
+                    "pattern": "${project:regex}"
+                  }
+                },
+                "fieldName": "project"
+              }
+            ],
+            "match": "any"
+          }
+        }
+      ],
+      "type": "barchart"
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": [
+    "velocity",
+    "firstmate"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "includeAll": true,
+        "label": "Project",
+        "multi": true,
+        "name": "project",
+        "options": [
+          {
+            "selected": true,
+            "text": "All",
+            "value": "$__all"
+          },
+          {
+            "text": "repo-a",
+            "value": "repo-a"
+          },
+          {
+            "text": "repo-b",
+            "value": "repo-b"
+          }
+        ],
+        "query": "repo-a,repo-b",
+        "type": "custom"
+      }
+    ]
+  },
+  "timezone": "browser",
+  "title": "Velocity Dashboard",
+  "uid": "firstmate-velocity",
+  "version": 0
+}
