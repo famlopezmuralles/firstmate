@@ -8,10 +8,9 @@
 # It never writes into a project clone and never restarts Grafana.
 #
 # Usage:
-#   bin/fm-velocity.sh [--projects-file FILE] [--projects-dir DIR] [--store FILE] [--dashboard FILE] [--since DATE] [--collect-only] [--render-only] [--help]
+#   bin/fm-velocity.sh [--projects-file FILE] [--projects-dir DIR] [--store FILE] [--dashboard FILE] [--collect-only] [--render-only] [--help]
 #
 # Defaults resolve relative to the repository root.
-# --since passes a date to git log (for example 2026-07-01).
 # --collect-only writes the store without rendering the dashboard.
 # --render-only renders the dashboard from an existing store.
 set -uo pipefail
@@ -21,7 +20,6 @@ PROJECTS_FILE="$ROOT/data/projects.md"
 PROJECTS_DIR="$ROOT/projects"
 STORE="$ROOT/data/velocity/velocity.json"
 DASHBOARD="$ROOT/grafana/velocity-dashboard.json"
-SINCE=""
 COLLECT_ONLY=0
 RENDER_ONLY=0
 
@@ -35,7 +33,6 @@ while [ $# -gt 0 ]; do
     --projects-dir) PROJECTS_DIR="$2"; shift 2 ;;
     --store) STORE="$2"; shift 2 ;;
     --dashboard) DASHBOARD="$2"; shift 2 ;;
-    --since) SINCE="$2"; shift 2 ;;
     --collect-only) COLLECT_ONLY=1; shift ;;
     --render-only) RENDER_ONLY=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -47,7 +44,6 @@ export FM_VELOCITY_PROJECTS_FILE="$PROJECTS_FILE"
 export FM_VELOCITY_PROJECTS_DIR="$PROJECTS_DIR"
 export FM_VELOCITY_STORE="$STORE"
 export FM_VELOCITY_DASHBOARD="$DASHBOARD"
-export FM_VELOCITY_SINCE="$SINCE"
 export FM_VELOCITY_COLLECT_ONLY="$COLLECT_ONLY"
 export FM_VELOCITY_RENDER_ONLY="$RENDER_ONLY"
 
@@ -64,7 +60,6 @@ projects_file = os.environ["FM_VELOCITY_PROJECTS_FILE"]
 projects_dir = os.environ["FM_VELOCITY_PROJECTS_DIR"]
 store_path = os.environ["FM_VELOCITY_STORE"]
 dashboard_path = os.environ["FM_VELOCITY_DASHBOARD"]
-since = os.environ["FM_VELOCITY_SINCE"]
 collect_only = os.environ["FM_VELOCITY_COLLECT_ONLY"] == "1"
 render_only = os.environ["FM_VELOCITY_RENDER_ONLY"] == "1"
 
@@ -123,11 +118,9 @@ def collect_prs(owner, repo):
         total += 1
     return {"total": total, "by_author": by_author}
 
-def collect_git(clone, since):
+def collect_git(clone):
     cmd = ["git", "-C", clone, "log", "--all",
            "--pretty=format:COMMIT|%an|%ae", "--numstat"]
-    if since:
-        cmd += ["--since", since]
     r = run(cmd)
     if r is None or r.returncode != 0:
         print(f"error: git log failed for {clone}", file=sys.stderr)
@@ -278,7 +271,7 @@ if not render_only:
         gh = parse_github_repo(remote) if remote else None
         if gh:
             prs = collect_prs(gh[0], gh[1])
-        git = collect_git(clone, since)
+        git = collect_git(clone)
         store["projects"][name] = {
             "prs": prs,
             "commits": {"total": git["total"], "by_author": git["by_author"],
