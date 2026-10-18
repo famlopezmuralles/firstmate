@@ -112,7 +112,7 @@ titles = [p["title"] for p in d["panels"]]
 assert "Per agent" in titles, titles
 for p in d["panels"]:
     assert p["datasource"]["type"] == "grafana-testdata-datasource", p
-    assert "$project" in json.dumps(p.get("transformations", [])), p["title"]
+    assert "${project:regex}" in json.dumps(p.get("transformations", [])), p["title"]
 print("dashboard ok")
 PY
   assert_equals "0" "$?" "dashboard contents correct"
@@ -130,6 +130,8 @@ test_clones_untouched() {
   local fakebin
   fakebin=$(fm_fakebin "$root/fake-clean")
   make_fake_gh "$fakebin"
+  mkdir -p "$root/home"
+  make_state_db "$root/home" "git@github.com:owner/repo-a.git"
   HOME="$root/home" PATH="$fakebin:$PATH" "$VEL" \
     --projects-file "$root/projects.md" --projects-dir "$root/projects" \
     --store "$root/v.json" --dashboard "$root/d.json" >/dev/null 2>&1

@@ -69,19 +69,33 @@ collect_only = os.environ["FM_VELOCITY_COLLECT_ONLY"] == "1"
 render_only = os.environ["FM_VELOCITY_RENDER_ONLY"] == "1"
 
 def parse_projects(path):
+    try:
+        fh = open(path, encoding="utf-8")
+    except OSError as e:
+        print(f"error: cannot read projects file {path}: {e}", file=sys.stderr)
+        sys.exit(1)
     names = []
-    with open(path, encoding="utf-8") as f:
+    with fh as f:
         for line in f:
-            m = re.match(r"^- (\S+)\s", line)
+            m = re.match(r"^-\s+(\S+)", line)
             if m:
                 names.append(m.group(1))
     return names
 
-def parse_github_repo(remote):
-    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", remote.strip())
+def _match_github(url):
+    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?/?$", (url or "").strip(), re.IGNORECASE)
     if not m:
         return None
     return (m.group(1), m.group(2))
+
+def parse_github_repo(remote):
+    return _match_github(remote)
+
+def normalize_repo_url(url):
+    m = _match_github(url)
+    if not m:
+        return None
+    return f"{m[0].lower()}/{m[1].lower()}"
 
 def run(cmd):
     try:
@@ -96,8 +110,8 @@ def collect_prs(owner, repo):
            "--paginate", "-q", ".[] | \"\\(.number) \\(.user.login) \\(.draft)\""]
     r = run(cmd)
     if r is None or r.returncode != 0:
-        print(f"warning: PR fetch failed for {owner}/{repo}", file=sys.stderr)
-        return {"total": 0, "by_author": {}}
+        print(f"error: PR fetch failed for {owner}/{repo}", file=sys.stderr)
+        sys.exit(1)
     by_author = {}
     total = 0
     for line in (r.stdout or "").splitlines():
@@ -116,9 +130,8 @@ def collect_git(clone, since):
         cmd += ["--since", since]
     r = run(cmd)
     if r is None or r.returncode != 0:
-        print(f"warning: git log failed for {clone}", file=sys.stderr)
-        return {"total": 0, "by_author": {}, "added": 0, "removed": 0,
-                "added_by": {}, "removed_by": {}}
+        print(f"error: git log failed for {clone}", file=sys.stderr)
+        sys.exit(1)
     total = 0
     by_author = {}
     added = 0
@@ -152,30 +165,20 @@ def collect_git(clone, since):
     return {"total": total, "by_author": by_author, "added": added,
             "removed": removed, "added_by": added_by, "removed_by": removed_by}
 
-def normalize_repo_url(url):
-    m = re.search(r"github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$", (url or "").strip(), re.IGNORECASE)
-    if not m:
-        return None
-    return f"{m.group(1).lower()}/{m.group(2).lower()}"
-
 def collect_runs(remote_by_project):
     db = os.path.expanduser("~/.no-mistakes/state.sqlite")
     if not os.path.exists(db):
-        alt = "/home/lopezc/.no-mistakes/state.sqlite"
-        db = alt if os.path.exists(alt) else db
-    if not os.path.exists(db):
-        print("warning: no-mistakes database not found", file=sys.stderr)
-        return {}
+        print(f"error: no-mistakes database not found: {db}", file=sys.stderr)
+        sys.exit(1)
     try:
-        con = sqlite3.connect(db)
-        rows = con.execute(
-            "SELECT repos.upstream_url, count(*) FROM runs "
-            "JOIN repos ON runs.repo_id = repos.id GROUP BY repos.upstream_url"
-        ).fetchall()
-        con.close()
+        with sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=5) as con:
+            rows = con.execute(
+                "SELECT repos.upstream_url, count(*) FROM runs "
+                "JOIN repos ON runs.repo_id = repos.id GROUP BY repos.upstream_url"
+            ).fetchall()
     except Exception as e:
-        print(f"warning: runs query failed: {e}", file=sys.stderr)
-        return {}
+        print(f"error: runs query failed: {e}", file=sys.stderr)
+        sys.exit(1)
     counts = {}
     for url, n in rows:
         norm = normalize_repo_url(url)
@@ -193,13 +196,14 @@ def build_dashboard(store):
     agent_rows = ["project,agent,prs,commits,added,removed"]
     for p in projects:
         d = store["projects"][p]
-        proj_rows.append(f"{p},{d['prs']['total']},{d['commits']['total']},"
+        safe_p = re.sub(r"[,\"\n]", "_", p)
+        proj_rows.append(f"{safe_p},{d['prs']['total']},{d['commits']['total']},"
                          f"{d['commits']['added']},{d['commits']['removed']},"
                          f"{d['no_mistakes_runs']['total']}")
         agents = set(d["prs"]["by_author"]) | set(d["commits"]["by_author"])
         for a in sorted(agents):
             safe = re.sub(r"[,\"\n]", "_", a)
-            agent_rows.append(f"{p},{safe},{d['prs']['by_author'].get(a, 0)},"
+            agent_rows.append(f"{safe_p},{safe},{d['prs']['by_author'].get(a, 0)},"
                               f"{d['commits']['by_author'].get(a, 0)},"
                               f"{d['commits']['added_by'].get(a, 0)},"
                               f"{d['commits']['removed_by'].get(a, 0)}")
@@ -214,7 +218,7 @@ def build_dashboard(store):
         trans = [{"id": "filterByValue",
                   "options": {"filters": [{"fieldName": "project",
                                            "config": {"id": "regex",
-                                                      "options": {"pattern": "$project"}}}],
+                                                      "options": {"pattern": "${project:regex}"}}}],
                               "match": "any"}}]
         p = {"id": pid, "title": title, "type": ptype, "datasource": testdata,
              "targets": [t], "transformations": trans,
@@ -267,15 +271,14 @@ if not render_only:
                 remote = r.stdout.strip()
             git_by_project[name] = clone
         else:
-            print(f"warning: missing clone for {name}", file=sys.stderr)
+            print(f"error: missing clone for {name}", file=sys.stderr)
+            sys.exit(1)
         remote_by_project[name] = remote
         prs = {"total": 0, "by_author": {}}
         gh = parse_github_repo(remote) if remote else None
         if gh:
             prs = collect_prs(gh[0], gh[1])
-        git = collect_git(clone, since) if os.path.isdir(clone) else \
-            {"total": 0, "by_author": {}, "added": 0, "removed": 0,
-             "added_by": {}, "removed_by": {}}
+        git = collect_git(clone, since)
         store["projects"][name] = {
             "prs": prs,
             "commits": {"total": git["total"], "by_author": git["by_author"],

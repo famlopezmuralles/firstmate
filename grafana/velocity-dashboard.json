@@ -37,7 +37,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
@@ -86,7 +86,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
@@ -135,7 +135,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
@@ -184,7 +184,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
@@ -233,7 +233,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
@@ -274,7 +274,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
@@ -315,7 +315,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
@@ -356,7 +356,7 @@
                 "config": {
                   "id": "regex",
                   "options": {
-                    "pattern": "$project"
+                    "pattern": "${project:regex}"
                   }
                 },
                 "fieldName": "project"
