@@ -1,6 +1,6 @@
 # Report catalog
 
-`bin/fm-reports-publish.sh` centralizes worker reports from this home and its registered secondmates into one read-only, searchable local catalog, served at `http://localhost/reports/` for the same local-only browsing experience `http://localhost/diffs/` already gives `explain-diff-html` output.
+`bin/fm-reports-publish.sh` centralizes worker reports from this home, its registered secondmates, and the optional `$HOME/redesigns/<project>/*.md` source into one read-only, searchable local catalog, served at `http://localhost/reports/` for the same local-only browsing experience `http://localhost/diffs/` already gives `explain-diff-html` output.
 Published reports are organized by project under `<publish-root>/<project>/...` (1:1 with the filesystem, matching the structure of `diffs-explained`), grouping unassociated tasks under a `general/` fallback.
 
 ## Persistence and decoupling from ephemeral worktrees
@@ -38,6 +38,7 @@ This home's own `data/` is always scanned.
 Every home in `data/secondmates.md` is scanned too: a local secondmate's home directory is read directly (same filesystem, read-only), and the one remote-host route is read through the existing bounded transport, `bin/fm-on.sh` plus `bin/fm-remote-file.sh`, fetching only its literal `data/<task>/report.md` files (the same filesystem scan `bin/fm-fleet-snapshot.sh`'s `scout_report_lines` performs locally).
 A remote home's supplemental, non-`report.md` files are not discovered, because there is no remote directory-listing primitive narrow enough to add safely here; this is a disclosed limitation, shown in the catalog, not a silent gap.
 An unreachable or failing source is listed by name with its reason rather than making the run look like an empty, successful catalog.
+The optional redesigns source scans only Markdown files directly inside each project directory under `$HOME/redesigns`; set `FM_REDESIGNS_DIR` to use another root or disable the source with an absent directory.
 
 ## Privacy
 

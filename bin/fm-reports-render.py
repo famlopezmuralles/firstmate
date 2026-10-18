@@ -291,7 +291,21 @@ def report_page_html(
 
 
 INDEX_CSS = PAGE_CSS + """
-table.catalog{font-size:0.92rem;}
+body{max-width:1100px;}
+table.catalog{table-layout:fixed;font-size:0.9rem;}
+table.catalog th{position:sticky;top:0;background:Canvas;}
+table.catalog tbody tr:nth-child(even){background:#8881;}
+table.catalog tbody tr:hover{background:#8882;}
+table.catalog td{overflow-wrap:break-word;}
+td.intent{position:relative;}
+td.intent.expandable{cursor:pointer;}
+td.intent.expandable.clamped{padding-bottom:1.35rem;}
+td.intent.expandable.clamped .intent-text{display:-webkit-box;-webkit-box-orient:vertical;
+  -webkit-line-clamp:4;overflow:hidden;}
+td.intent.expandable.clamped::after{content:"show more";position:absolute;right:0.25rem;
+  bottom:0.2rem;font-size:0.72rem;line-height:1;padding:0.15rem 0.4rem;background:Canvas;
+  border:1px solid #8886;border-radius:4px;}
+.unknown{opacity:0.55;font-style:italic;}
 input#q{width:100%;padding:0.5rem;font-size:1rem;margin-bottom:1rem;
   box-sizing:border-box;}
 .unavailable{border:1px solid #c0392b66;border-radius:8px;padding:0.75rem 1rem;
@@ -312,11 +326,49 @@ if (q) {
     }
   });
 }
+
+// Captain's-intent cells hold long text: clamp the inner text box to four
+// lines and offer a click/keyboard toggle when (and only when) the content
+// actually exceeds four lines of height.
+for (const cell of document.querySelectorAll('td.intent')) {
+  const text = cell.querySelector('.intent-text');
+  if (!text) continue;
+  const lineHeight = parseFloat(getComputedStyle(text).lineHeight);
+  if (text.offsetHeight <= Math.ceil(lineHeight * 4) + 1) continue;
+  cell.classList.add('clamped', 'expandable');
+  cell.setAttribute('tabindex', '0');
+  cell.title = 'Click to expand';
+  cell.addEventListener('click', () => {
+    const clamped = cell.classList.toggle('clamped');
+    cell.title = clamped ? 'Click to expand' : 'Click to collapse';
+  });
+  cell.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    cell.click();
+  });
+}
 """
 
 
 PROJECT_COLUMNS = ["report", "task", "home", "model", "effort", "date", "intent", "pr"]
 ROOT_COLUMNS = ["report", "project", "task", "home", "date", "pr"]
+
+
+def format_date(value: str) -> str:
+    """'2026-10-16T05:00:52Z' -> '2026-10-16 05:00'; pass through unparseable values."""
+    from datetime import datetime
+
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return value
+
+
+def meta_cell(value: str | None) -> str:
+    if not value or value == "unknown":
+        return '<span class="unknown">unknown</span>'
+    return html.escape(value)
 
 
 def report_row_html(r: dict, href: str, columns: list[str]) -> str:
@@ -329,18 +381,32 @@ def report_row_html(r: dict, href: str, columns: list[str]) -> str:
         safe_pr = html.escape(pr_url, quote=True)
         pr_cell = f'<a href="{safe_pr}" target="_blank" rel="noopener noreferrer">PR</a>'
     project = html.escape(r["project"], quote=True)
+    date_raw = r.get("updated") or "unknown"
+    date_text = format_date(date_raw)
+    date_inner = (
+        f'<span title="{html.escape(date_raw, quote=True)}">{html.escape(date_text)}</span>'
+        if date_text != date_raw
+        else html.escape(date_text)
+    )
+    intent = (r.get("intent") or "").strip()
     cells = {
         "report": f'<a href="{html.escape(href, quote=True)}">{title_esc}{badge}</a>',
         "project": f'<a href="{project}/index.html">{project}</a>',
         "task": html.escape(r.get("task_id", "")),
-        "home": html.escape(r.get("home", "")),
-        "model": html.escape(r.get("model") or "unknown"),
-        "effort": html.escape(r.get("thinking_effort") or "unknown"),
-        "date": html.escape(r.get("updated") or "unknown"),
-        "intent": html.escape(r.get("intent") or "unknown"),
+        "home": meta_cell(r.get("home", "")),
+        "model": meta_cell(r.get("model")),
+        "effort": meta_cell(r.get("thinking_effort")),
+        "date": date_inner,
+        "intent": (
+            f'<div class="intent-text">{html.escape(intent)}</div>' if intent
+            else '<span class="unknown">unknown</span>'
+        ),
         "pr": pr_cell,
     }
-    tds = "".join(f"<td>{cells[c]}</td>" for c in columns)
+    td_attrs = {"intent": ' class="intent"'} if intent else {}
+    tds = "".join(
+        f"<td{td_attrs.get(c, '')}>{cells[c]}</td>" for c in columns
+    )
     return f"<tr{tr_class}>{tds}</tr>"
 
 
@@ -363,7 +429,8 @@ def project_index_html(project_slug: str, reports: list[dict]) -> str:
 <p>{count} report(s). Local machine only.</p>
 <input id="q" type="search" placeholder="Filter {safe_proj} reports&hellip;">
 <table class="catalog" id="catalog">
-<thead><tr><th>Report</th><th>Task</th><th>Home</th><th>Model used</th><th>Thinking effort</th><th>Date</th><th>Captain's intent</th><th>PR</th></tr></thead>
+<colgroup><col style="width:18%"><col style="width:12%"><col style="width:6%"><col style="width:8%"><col style="width:8%"><col style="width:10%"><col style="width:32%"><col style="width:6%"></colgroup>
+<thead><tr><th>Report</th><th>Task</th><th>Home</th><th>Model used</th><th>Thinking effort</th><th>Date</th><th title="Click a cell to expand or collapse">Captain's intent</th><th>PR</th></tr></thead>
 <tbody>
 {tbody_html}
 </tbody>
@@ -416,6 +483,7 @@ def root_index_html(
 {projects_nav}
 <input id="q" type="search" placeholder="Search by title, project, home, or task id&hellip;">
 <table class="catalog" id="catalog">
+<colgroup><col style="width:34%"><col style="width:10%"><col style="width:22%"><col style="width:10%"><col style="width:16%"><col style="width:8%"></colgroup>
 <thead><tr><th>Report</th><th>Project</th><th>Task</th><th>Home</th><th>Updated</th><th>PR</th></tr></thead>
 <tbody>
 {tbody_html}
@@ -457,7 +525,7 @@ def main() -> int:
         return 1
 
     skipped: list[str] = []
-    persisted_reports: dict[tuple[str, str, str], dict] = {}
+    persisted_reports: dict[tuple[str, str, str, str], dict] = {}
     old_projects: set[str] = set()
 
     os.makedirs(publish_root, exist_ok=True)
@@ -485,7 +553,7 @@ def main() -> int:
                     r["stem"] = stem
                     r["project"] = proj
                     old_projects.add(proj)
-                    report_key = (task_id, stem, home_id)
+                    report_key = (proj, task_id, stem, home_id)
                     prior_paths = persisted_reports.get(report_key, {}).get("_source_paths", [])
                     r["_source_paths"] = [*prior_paths, html_path]
                     persisted_reports[report_key] = r
@@ -546,7 +614,21 @@ def main() -> int:
             if backlog_state:
                 provenance.append(("Backlog state", html.escape(backlog_state)))
 
-            report_key = (task_id, stem, home_id)
+            report_key = (proj_slug, task_id, stem, home_id)
+            if home_id != "redesigns":
+                for prior_key in list(persisted_reports):
+                    if (
+                        len(prior_key) == 4
+                        and prior_key[1:] == (task_id, stem, home_id)
+                        and prior_key[0] != proj_slug
+                    ):
+                        old_report = persisted_reports.pop(prior_key)
+                        old_paths = [*old_report.get("_source_paths", []), old_report.get("html_path", "")]
+                        for old_path in old_paths:
+                            if old_path:
+                                old_full = os.path.join(publish_root, old_path)
+                                if os.path.isfile(old_full):
+                                    os.unlink(old_full)
             prior_report = persisted_reports.get(report_key, {})
             current_report = {
                 "title": title,
@@ -573,7 +655,7 @@ def main() -> int:
         key = (report["project"], report["task_id"], report["stem"])
         home_ids_by_report[key].add(report["home_id"])
 
-    for (task_id, stem, home_id), report in persisted_reports.items():
+    for (project, task_id, stem, home_id), report in persisted_reports.items():
         proj = report["project"]
         filename = task_id
         if stem != "report":

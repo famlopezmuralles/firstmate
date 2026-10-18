@@ -76,7 +76,7 @@ EOF
 }
 
 run_publish() {  # <root>
-  FM_HOME="$1/main" FM_REPORTS_PUBLISH_ROOT="$1/publish" FM_REPORTS_REMOTE_TIMEOUT=6 \
+  FM_HOME="$1/main" FM_REDESIGNS_DIR="$1/redesigns" FM_REPORTS_PUBLISH_ROOT="$1/publish" FM_REPORTS_REMOTE_TIMEOUT=6 \
     "$PUBLISH" publish
 }
 
@@ -421,6 +421,35 @@ test_unknown_project_falls_back_to_general() {
   pass "an unassociated report falls back to the clean general project grouping"
 }
 
+test_redesigns_source_is_grouped_by_project() {
+  local root
+  root=$(fm_test_tmproot fm-reports-redesigns)
+  make_fixture "$root"
+  mkdir -p "$root/redesigns/alpha-project" "$root/redesigns/beta-project" "$root/redesigns/not-a-project/nested"
+  printf '# Alpha redesign\n\nALPHA-REDESIGN-MARKER\n' \
+    > "$root/redesigns/alpha-project/report.md"
+  printf '# Beta redesign\n\nBETA-REDESIGN-MARKER\n' \
+    > "$root/redesigns/beta-project/report.md"
+  printf '# Nested redesign\n\nNESTED-REDESIGN-MARKER\n' \
+    > "$root/redesigns/not-a-project/nested/ignored.md"
+
+  run_publish "$root" >/dev/null 2>"$root/stderr" || fail "publish failed: $(cat "$root/stderr")"
+
+  [ -f "$root/publish/alpha-project/report.html" ] \
+    || fail "redesign report should be published under its project"
+  [ -f "$root/publish/beta-project/report.html" ] \
+    || fail "each redesign project should receive its own report page"
+  [ -f "$root/publish/alpha-project/index.html" ] \
+    || fail "redesign project index should be generated"
+  assert_contains "$(cat "$root/publish/alpha-project/report.html")" 'ALPHA-REDESIGN-MARKER' \
+    "redesign report content should be rendered"
+  assert_not_contains "$(catalog_json "$root")" 'NESTED-REDESIGN-MARKER' \
+    "reports deeper than one project directory must not be scanned"
+  assert_contains "$(catalog_json "$root")" '"home_id": "redesigns"' \
+    "redesign reports should identify their source"
+  pass "redesign reports are discovered one level below ~/redesigns and grouped by project"
+}
+
 test_persistence_when_worktree_pruned() {
   local root
   root=$(fm_test_tmproot fm-reports-prune)
@@ -675,6 +704,7 @@ test_project_slugs_preserve_owner_namespaces
 test_remote_report_provenance
 test_unreachable_remote_is_disclosed_not_silently_empty
 test_unknown_project_falls_back_to_general
+test_redesigns_source_is_grouped_by_project
 test_persistence_when_worktree_pruned
 test_report_project_reassignment_updates_existing_identity
 test_git_repository_initialized_and_committed
