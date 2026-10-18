@@ -7,7 +7,9 @@
 #   fm-reports-publish.sh install-cron
 #
 # `publish` (the default) is the recurring refresh: it scans this home's own
-# data/ tree and every registered secondmate home for worker reports, enriches
+# data/ tree, every registered secondmate home, and the optional
+# $HOME/redesigns/<project>/*.md source (overridden with FM_REDESIGNS_DIR)
+# for worker reports, enriches
 # each with backlog context through bin/fm-fleet-snapshot.sh (never a second
 # backlog parser), and hands a discovery manifest to fm-reports-render.py, which
 # organizes published reports by project under the publish root (persisting only
@@ -39,6 +41,9 @@
 # captain-hold decision records, and firstmate-authored steering notes), and
 # except a non-regular-file (symlink) entry. Superseded variants (a filename
 # containing "prior" or "before") are still published, marked historical.
+# The optional redesigns source publishes any *.md file directly inside each
+# $HOME/redesigns/<project>/ directory under the same deny-list, grouped by
+# directory basename with no backlog enrichment; prior/before stems stay marked historical.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -282,6 +287,48 @@ discover_remote_home() {  # <id> <label>
   HOME_JSON_FILES+=("$out_file")
 }
 
+discover_redesigns() {
+  local redesigns_dir="${FM_REDESIGNS_DIR:-$HOME/redesigns}"
+  [ -d "$redesigns_dir" ] || return 0
+  local out_file="$WORK_DIR/redesigns.home.json"
+  local reports_file="$WORK_DIR/redesigns.reports.jsonl"
+  : > "$reports_file"
+
+  local file proj_dir project base stem mtime title model effort intent historical
+  while IFS= read -r file; do
+    proj_dir=$(dirname "$file")
+    project=$(basename "$proj_dir")
+    base=$(basename "$file")
+    is_safe_component "$project" || continue
+    is_denied_report_name "$base" && continue
+    stem=${base%.md}
+    is_safe_component "$stem" || continue
+    mtime=$(mtime_iso "$file") || mtime="unknown"
+    historical=false
+    is_historical_name "$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]')" && historical=true
+    title=$(grep -m1 '^#\+ ' "$file" 2>/dev/null | sed -e 's/^#\+ //' -e 's/[[:space:]]*$//')
+    [ -n "$title" ] || title=${stem//[-_]/ }
+    model=$(grep -m1 -i '^\*\*Delegated to:\*\*' "$file" 2>/dev/null | sed -e 's/^\*\*Delegated to:\*\*[[:space:]]*//' -e 's/[[:space:]]*$//')
+    effort="unknown"
+    local effort_re='\(([^)]+)\)'
+    if [[ "$model" =~ $effort_re ]]; then
+      effort="${BASH_REMATCH[1]}"
+      model=$(printf '%s' "$model" | sed 's/[[:space:]]*(.*)//')
+    fi
+    [ -n "$model" ] || model="unknown"
+    intent=$(grep -m1 -i '^\*\*Purpose:\*\*' "$file" 2>/dev/null | sed -e 's/^\*\*Purpose:\*\*[[:space:]]*//' -e 's/[[:space:]]*$//')
+    [ -n "$intent" ] || intent="$(captain_intent "$file")"
+    report_entry_json "$stem" "report.md" "$file" "$title" "$project" "" "" "$mtime" "$historical" "$intent" "$model" "$effort" \
+      >> "$reports_file"
+  done < <(find "$redesigns_dir" -mindepth 2 -maxdepth 2 -type f -name '*.md' 2>/dev/null | sort)
+
+  if [ -s "$reports_file" ]; then
+    jq -n --arg id "redesigns" --arg label "Redesigns" --slurpfile reports "$reports_file" \
+      '{id:$id,label:$label,remote:false,reports:$reports}' > "$out_file"
+    HOME_JSON_FILES+=("$out_file")
+  fi
+}
+
 do_publish() {
   local owned_path
   discover_local_home main "main" "$FM_HOME"
@@ -299,6 +346,7 @@ do_publish() {
   else
     note_unavailable "secondmates registry" "data/secondmates.md is absent or unsafe; only this home's own reports were scanned"
   fi
+  discover_redesigns
 
   local homes_array="$WORK_DIR/homes.json" unavailable_array="$WORK_DIR/unavailable.json"
   if [ "${#HOME_JSON_FILES[@]}" -gt 0 ]; then
