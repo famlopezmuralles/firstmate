@@ -391,6 +391,11 @@ test_no_mistakes_skip_defaults() {
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
   assert_grep 'Every `no-mistakes axi run` for this task passes `--skip test,lint,document` (captain default), and skips nothing else; intent, rebase, review, push, pr and ci always run.' "$github_out" \
     "github no-mistakes DoD must pass the captain-default skip on every run"
+  # shellcheck disable=SC2016  # literal backticks and placeholder are deliberate
+  assert_grep 'add `; skipped: <step> (<reason>)` for every pipeline or review step that was skipped' "$github_out" \
+    "github no-mistakes DoD must surface skipped steps in the ready status"
+  assert_grep 'confirm that the PR body states the same skipped steps and reasons' "$github_out" \
+    "github no-mistakes DoD must surface skipped steps in the PR body"
   assert_no_grep '--skip push,pr,ci' "$github_out" \
     "github no-mistakes DoD must not carry the gerrit skip rule"
   # shellcheck disable=SC2016  # single quotes are deliberate: the backticks must stay literal
