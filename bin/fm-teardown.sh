@@ -2662,7 +2662,7 @@ EOF
 }
 
 remove_firstmate_home() {
-  local home=$1 label=$2 expected_id=${3:-} abs_home_path process_event_backup
+  local home=$1 label=$2 expected_id=${3:-} abs_home_path process_event_backup marker_stash marker_name
   [ -n "$home" ] || return 0
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
@@ -2681,15 +2681,33 @@ remove_firstmate_home() {
       restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
       return 1
     }
+    # The retired home's gitignored identity markers survive `treehouse return`
+    # inside the pooled slot, so move them aside before the return below.
+    # A failed return restores them: the home is still leased and keeps its
+    # identity, while a successful return drops the stash with the slot.
+    marker_stash=$(umask 077; mktemp -d "${TMPDIR:-/tmp}/fm-teardown-markers.XXXXXX" 2>/dev/null) || marker_stash=
+    if [ -z "$marker_stash" ] || [ ! -d "$marker_stash" ]; then
+      echo "error: cannot stage $label identity markers for $abs_home_path; nothing was changed" >&2
+      restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
+      return 1
+    fi
+    for marker_name in "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
+      if [ -f "$abs_home_path/$marker_name" ] && [ ! -L "$abs_home_path/$marker_name" ]; then
+        mv -- "$abs_home_path/$marker_name" "$marker_stash/$marker_name" 2>/dev/null || true
+      fi
+    done
     teardown_treehouse_return "$abs_home_path" "$FM_ROOT" "$label" || {
+      for marker_name in "$SUB_HOME_MARKER" "$SUB_HOME_PARENT_MARKER"; do
+        if [ -f "$marker_stash/$marker_name" ] && [ ! -L "$marker_stash/$marker_name" ]; then
+          mv -- "$marker_stash/$marker_name" "$abs_home_path/$marker_name" 2>/dev/null || true
+        fi
+      done
+      rm -rf -- "$marker_stash" 2>/dev/null || true
       echo "error: treehouse return failed for $label $abs_home_path; lease may still be held" >&2
       restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
       return 1
     }
-    # The retired home's gitignored identity markers survive `treehouse return`
-    # inside the pooled slot, so sweep them now that the return succeeded. A
-    # failed return leaves a still-leased home intact and keeps its markers.
-    rm -f -- "$abs_home_path/.fm-secondmate-home" "$abs_home_path/.fm-secondmate-parent" 2>/dev/null || true
+    rm -rf -- "$marker_stash" 2>/dev/null || true
     [ -z "$process_event_backup" ] || rm -rf -- "$process_event_backup"
     return 0
   fi

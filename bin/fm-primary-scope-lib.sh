@@ -50,6 +50,9 @@ fm_root_is_secondmate_home() {
 # worktree.
 fm_primary_root_matches() {
   local root=$1 git_dir git_common_dir
+  # A worker session never owns a home: FM_TASK_ID is exported only for ship
+  # and scout launches, so this rejects before any marker is accepted.
+  [ -z "${FM_TASK_ID:-}" ] || return 1
   if ! fm_root_is_secondmate_home "$root"; then
     git_dir=$(git -C "$root" rev-parse --git-dir 2>/dev/null) || return 1
     git_common_dir=$(git -C "$root" rev-parse --git-common-dir 2>/dev/null) || return 1

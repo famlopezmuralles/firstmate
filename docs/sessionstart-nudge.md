@@ -184,7 +184,7 @@ So a truncated digest does neither of these:
 - They share `bin/fm-primary-scope-lib.sh` with `bin/fm-turnend-guard.sh`, so every hook uses one primary-detection owner.
 - They stand down for a worker session carrying `FM_TASK_ID`, which `bin/fm-spawn.sh` exports only for ship and scout launches, so a worker never takes the supervisor helm.
 - A pooled worker slot claimed for a task is never a secondmate home, even when a retired home's gitignored identity marker is still on disk inside it.
-- `bin/fm-teardown.sh` sweeps those markers on every successful pooled-slot return, so the staleness converges away as slots recycle.
+- `bin/fm-teardown.sh` moves those markers aside before a pooled-slot return and drops them only when it succeeds, restoring them when it fails, so the staleness converges away as slots recycle.
 
 A fresh clone has no gitignored state directory yet.
 When the root otherwise qualifies as primary, the run wrapper creates the state directory before the unchanged scope check, so the first session takes the helm without a manual `mkdir state`.

@@ -145,6 +145,21 @@ test_stale_marker_in_claimed_pool_slot_is_silent() {
   pass "fm-sessionstart-nudge: a stale marker in a worker-claimed pool slot is not a home"
 }
 
+test_worker_mark_in_linked_secondmate_home_is_silent() {
+  local base="$TMP_ROOT/worker-linked-base" root="$TMP_ROOT/worker-linked-home" out status=0
+  fm_git_worktree "$base" "$root" fm/worker-linked-secondmate
+  mkdir -p "$root/bin" "$root/state"
+  : > "$root/AGENTS.md"
+  printf 'live-mate\n' > "$root/.fm-secondmate-home"
+  # Non-vacuity: without the worker mark this marked linked home is a
+  # primary and nudges, so the silence below comes from the mark alone.
+  out=$(env -u FM_TASK_ID FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE") || status=$?
+  expect_code 0 "$status" "marked linked home nudge without worker mark"
+  [ "$out" = "$NUDGE_LINE" ] || fail "a marked linked home without a worker mark did not nudge, got: $out"
+  expect_silent_zero "linked worker mark nudge" env FM_TASK_ID=session-start-worker-guard FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
+  pass "fm-sessionstart-nudge: a worker mark stands down before any marker is accepted"
+}
+
 test_missing_state_is_silent() {
   local root="$TMP_ROOT/missing-state"
   make_primary "$root"
@@ -1219,6 +1234,7 @@ test_gate_common_dir_is_silent
 test_unmarked_linked_worktree_is_silent
 test_linked_secondmate_primary_nudges
 test_worker_mark_is_silent
+test_worker_mark_in_linked_secondmate_home_is_silent
 test_stale_marker_in_claimed_pool_slot_is_silent
 test_missing_state_is_silent
 test_owned_lock_is_silent
