@@ -277,6 +277,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "PR-MERGE-RUNBOOK.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "CONTRIBUTING.md",
       "audience": "maintainer-architecture"
     },
