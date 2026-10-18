@@ -1,0 +1,25 @@
+=== A: genuine primary nudges (regression) ===
+--- nudge, no worker mark (must print one instruction line):
+⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+exit=0
+--- nudge with FM_TASK_ID + stale marker (must be silent exit 0):
+exit=0
+--- nudge, stale marker, no worker mark (non-vacuity, must nudge):
+⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+exit=0
+=== B: pooled slot stale marker + claim ===
+--- unclaimed marked slot (non-vacuity, must nudge):
+⁣FIRSTMATE_OP: v1 session-start: Run `bin/fm-session-start.sh` now, exactly once, before executing any other instructions.
+exit=0
+--- claimed slot (must be silent exit 0):
+exit=0
+--- scope lib direct:
+OK: claimed slot not a home
+OK non-vacuity: unclaimed marked slot IS a home
+=== C: run wrapper worker stand-down ===
+--- run --source startup with FM_TASK_ID (silent exit 0, no state dir):
+exit=0
+OK: no state dir manufactured
+--- run --pi-prerequisite with FM_TASK_ID (silent exit 3):
+exit=3
+DONE live nudge/run checks

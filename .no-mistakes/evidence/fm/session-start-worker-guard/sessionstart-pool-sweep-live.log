@@ -1,0 +1,17 @@
+=== E: pooled-slot marker sweep (real seed_return_treehouse_home + stub treehouse) ===
+--- before:
+.
+..
+.fm-secondmate-home
+.fm-secondmate-parent
+--- successful return (stub exit 0):
+seed fn exit=0
+--- after:
+.
+..
+OK: stale markers swept after successful return
+--- failed-return control (stub exit 1, markers must be KEPT):
+warning: failed to return treehouse-acquired home /tmp/fm-sweep-lab.zQOPzC/slot-home during seed rollback; lease may still be held
+seed fn exit=0
+OK: failed return keeps leased-home markers
+DONE-E

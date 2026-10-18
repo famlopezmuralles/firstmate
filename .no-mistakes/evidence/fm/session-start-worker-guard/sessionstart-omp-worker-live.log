@@ -1,0 +1,5 @@
+=== D: OMP extension worker stand-down (real .omp extension via node) ===
+fixture: /tmp/fm-omp-worker.7UkKNp
+OK: OMP worker spawns no hook on start/compact; later non-worker session still delivers
+node exit=0
+DONE-D
