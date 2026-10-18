@@ -1,0 +1,5 @@
+ok - fm-sessionstart-nudge: a worker session stays silent even with a stale secondmate marker
+ok - fm-sessionstart-nudge: a worker mark stands down before any marker is accepted
+ok - fm-sessionstart-nudge: a stale marker in a worker-claimed pool slot is not a home
+ok - run wrapper: a worker resume and a stale-marked pool slot run no session start
+ok - Pi spawns no session start for a worker session on startup, resume, or compaction

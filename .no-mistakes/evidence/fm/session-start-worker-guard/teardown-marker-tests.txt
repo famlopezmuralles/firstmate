@@ -1,0 +1,2 @@
+ok - a secondmate retirement moves its markers aside before the pooled-slot return and drops them on success
+ok - a secondmate retirement restores its markers when the pooled-slot return fails
