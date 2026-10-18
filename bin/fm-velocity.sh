@@ -267,8 +267,12 @@ if not render_only:
             print(f"error: missing clone for {name}", file=sys.stderr)
             sys.exit(1)
         remote_by_project[name] = remote
+        if remote is None:
+            print(f"warning: no origin remote for {name}; PR and run counts default to 0", file=sys.stderr)
         prs = {"total": 0, "by_author": {}}
         gh = parse_github_repo(remote) if remote else None
+        if remote is not None and gh is None:
+            print(f"warning: non-GitHub remote for {name}; PR count defaults to 0", file=sys.stderr)
         if gh:
             prs = collect_prs(gh[0], gh[1])
         git = collect_git(clone)
