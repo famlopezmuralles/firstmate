@@ -2686,6 +2686,10 @@ remove_firstmate_home() {
       restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
       return 1
     }
+    # The retired home's gitignored identity markers survive `treehouse return`
+    # inside the pooled slot, so sweep them now that the return succeeded. A
+    # failed return leaves a still-leased home intact and keeps its markers.
+    rm -f -- "$abs_home_path/.fm-secondmate-home" "$abs_home_path/.fm-secondmate-parent" 2>/dev/null || true
     [ -z "$process_event_backup" ] || rm -rf -- "$process_event_backup"
     return 0
   fi
@@ -3628,6 +3632,10 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
   }
+  # This slot was this task's worker copy, so any secondmate identity marker
+  # still inside it is stale by definition: the gitignored markers survive
+  # `treehouse return`. Sweep them so the slot's next holder starts clean.
+  rm -f -- "$WT/.fm-secondmate-home" "$WT/.fm-secondmate-parent" 2>/dev/null || true
   # The slot is back in the pool, so this task's claim on it is spent. Dropping
   # it here - and only after a return that succeeded - keeps a returned slot
   # unclaimed until its next holder claims it, and leaves the claim in place

@@ -90,6 +90,10 @@ stand_down() {
 # they do not own. Pi's preflight-only status preserves that intentional silence
 # without mistaking it for a failed eligible attempt that needs the manual nudge.
 fm_is_gate_agent "$FM_ROOT" && stand_down
+# A worker session (FM_TASK_ID is exported for ship and scout launches
+# only) never runs a session start. This stands down before the state-dir
+# creation below, so a worker never manufactures eligibility either.
+[ -z "${FM_TASK_ID:-}" ] || stand_down
 if [ ! -d "$STATE" ] && fm_primary_root_matches "$FM_ROOT"; then
   if ! MKDIR_ERR=$(mkdir -p "$STATE" 2>&1); then
     printf 'fm-sessionstart-run: startup could not create the state directory %s: %s\n' \

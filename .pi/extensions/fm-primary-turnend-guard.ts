@@ -59,6 +59,14 @@ function markLoaded(): void {
   writeFileSync(marker, `${extensionVersion}\n${process.pid}\n`);
 }
 
+// Workers keep their role and only take steering from firstmate: FM_TASK_ID
+// is exported only for ship and scout launches, never for a secondmate or
+// primary session, so a session carrying it never takes the helm here. The
+// wrappers enforce the same stand-down; this skips even spawning the hook.
+function isWorkerSession(): boolean {
+  return (process.env.FM_TASK_ID ?? "").length > 0;
+}
+
 // Pi's session_start reasons are startup | reload | new | resume | fork, and a
 // separate session_compact event fires after a compaction. "new" is Pi's /new
 // while reload, resume, and fork all keep prior context.
@@ -546,7 +554,7 @@ export default function (pi: ExtensionAPI) {
       ? startupRebuildSource(ctx) ?? "startup"
       : { new: "clear", resume: "resume", fork: "fork" }[reason];
     markLoaded();
-    if (!source) return;
+    if (!source || isWorkerSession()) return;
     registerSessionstartExitListener();
     sessionstartGeneration = createSessionstartGeneration(
       source as SessionstartSource,
@@ -565,6 +573,7 @@ export default function (pi: ExtensionAPI) {
   // may retry without another before_agent_start, so the event keeps its
   // existing delivery path while sharing generation ownership and cancellation.
   pi.on?.("session_compact", async (_event, ctx) => {
+    if (isWorkerSession()) return;
     registerSessionstartExitListener();
     const generation = createSessionstartGeneration("compact", sessionIdFromContext(ctx));
     sessionstartGeneration = generation;
