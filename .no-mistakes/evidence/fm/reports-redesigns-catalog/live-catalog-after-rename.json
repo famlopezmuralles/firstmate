@@ -1,0 +1,19 @@
+{
+  "reports": [
+    {
+      "title": "Alpha",
+      "home": "Redesigns",
+      "home_id": "redesigns",
+      "project": "alpha2",
+      "task_id": "report",
+      "stem": "report",
+      "updated": "2026-10-18T20:51:14Z",
+      "pr_url": null,
+      "historical": false,
+      "intent": null,
+      "model": "unknown",
+      "thinking_effort": "unknown",
+      "html_path": "alpha2/report.html"
+    }
+  ]
+}

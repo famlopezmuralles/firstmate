@@ -1,0 +1,32 @@
+[
+ {
+  "title": "Alpha redesign",
+  "home": "Redesigns",
+  "home_id": "redesigns",
+  "project": "alpha-project",
+  "task_id": "report",
+  "stem": "report",
+  "updated": "2026-10-18T20:50:56Z",
+  "pr_url": null,
+  "historical": false,
+  "intent": null,
+  "model": "unknown",
+  "thinking_effort": "unknown",
+  "html_path": "alpha-project/report.html"
+ },
+ {
+  "title": "Beta redesign",
+  "home": "Redesigns",
+  "home_id": "redesigns",
+  "project": "beta-project",
+  "task_id": "report",
+  "stem": "report",
+  "updated": "2026-10-18T20:50:56Z",
+  "pr_url": null,
+  "historical": false,
+  "intent": null,
+  "model": "unknown",
+  "thinking_effort": "unknown",
+  "html_path": "beta-project/report.html"
+ }
+]
