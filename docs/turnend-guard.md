@@ -66,6 +66,10 @@ The marker must meet both of these conditions:
 - It is a regular non-symlink file.
 - Its whitespace-stripped first line is a non-empty identifier containing only letters, digits, dots, underscores, and dashes.
 
+A marker that meets both conditions still does not count when a worker owns the checkout.
+A session carrying `FM_TASK_ID` never owns a home, because `bin/fm-spawn.sh` exports that mark only for ship and scout launches.
+A pooled slot claimed for a task is never a secondmate home either, even when a retired home's gitignored marker is still on disk inside it.
+
 An unmarked checkout or invalid marker falls through to the git-dir check.
 That check keeps crewmate and scout linked worktrees inert because their git dir differs from their git common dir.
 It also requires `AGENTS.md`, `bin/`, and the effective state directory.
