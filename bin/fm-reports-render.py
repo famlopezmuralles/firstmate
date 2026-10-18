@@ -526,6 +526,7 @@ def main() -> int:
 
     skipped: list[str] = []
     persisted_reports: dict[tuple[str, str, str, str], dict] = {}
+    fresh_keys: set[tuple[str, str, str, str]] = set()
     old_projects: set[str] = set()
 
     os.makedirs(publish_root, exist_ok=True)
@@ -615,20 +616,6 @@ def main() -> int:
                 provenance.append(("Backlog state", html.escape(backlog_state)))
 
             report_key = (proj_slug, task_id, stem, home_id)
-            if home_id != "redesigns":
-                for prior_key in list(persisted_reports):
-                    if (
-                        len(prior_key) == 4
-                        and prior_key[1:] == (task_id, stem, home_id)
-                        and prior_key[0] != proj_slug
-                    ):
-                        old_report = persisted_reports.pop(prior_key)
-                        old_paths = [*old_report.get("_source_paths", []), old_report.get("html_path", "")]
-                        for old_path in old_paths:
-                            if old_path:
-                                old_full = os.path.join(publish_root, old_path)
-                                if os.path.isfile(old_full):
-                                    os.unlink(old_full)
             prior_report = persisted_reports.get(report_key, {})
             current_report = {
                 "title": title,
@@ -649,6 +636,23 @@ def main() -> int:
                 if field in prior_report:
                     current_report[field] = prior_report[field]
             persisted_reports[report_key] = current_report
+            fresh_keys.add(report_key)
+
+    tail_projects: dict[tuple[str, str, str], set[str]] = collections.defaultdict(set)
+    for (proj, task_id, stem, home_id) in fresh_keys:
+        tail_projects[(task_id, stem, home_id)].add(proj)
+    for prior_key in list(persisted_reports):
+        if prior_key in fresh_keys:
+            continue
+        tail = (prior_key[1], prior_key[2], prior_key[3])
+        if tail in tail_projects and prior_key[0] not in tail_projects[tail]:
+            old_report = persisted_reports.pop(prior_key)
+            old_paths = [*old_report.get("_source_paths", []), old_report.get("html_path", "")]
+            for old_path in old_paths:
+                if old_path:
+                    old_full = os.path.join(publish_root, old_path)
+                    if os.path.isfile(old_full):
+                        os.unlink(old_full)
 
     home_ids_by_report: dict[tuple[str, str, str], set[str]] = collections.defaultdict(set)
     for report in persisted_reports.values():

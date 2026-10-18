@@ -289,7 +289,7 @@ discover_redesigns() {
   local reports_file="$WORK_DIR/redesigns.reports.jsonl"
   : > "$reports_file"
 
-  local file proj_dir project base stem mtime title model effort intent
+  local file proj_dir project base stem mtime title model effort intent historical
   while IFS= read -r file; do
     proj_dir=$(dirname "$file")
     project=$(basename "$proj_dir")
@@ -299,6 +299,8 @@ discover_redesigns() {
     stem=${base%.md}
     is_safe_component "$stem" || continue
     mtime=$(mtime_iso "$file") || mtime="unknown"
+    historical=false
+    is_historical_name "$(printf '%s' "$stem" | tr '[:upper:]' '[:lower:]')" && historical=true
     title=$(grep -m1 '^#\+ ' "$file" 2>/dev/null | sed -e 's/^#\+ //' -e 's/[[:space:]]*$//')
     [ -n "$title" ] || title=${stem//[-_]/ }
     model=$(grep -m1 -i '^\*\*Delegated to:\*\*' "$file" 2>/dev/null | sed -e 's/^\*\*Delegated to:\*\*[[:space:]]*//' -e 's/[[:space:]]*$//')
@@ -311,7 +313,7 @@ discover_redesigns() {
     [ -n "$model" ] || model="unknown"
     intent=$(grep -m1 -i '^\*\*Purpose:\*\*' "$file" 2>/dev/null | sed -e 's/^\*\*Purpose:\*\*[[:space:]]*//' -e 's/[[:space:]]*$//')
     [ -n "$intent" ] || intent="$(captain_intent "$file")"
-    report_entry_json "$stem" "report.md" "$file" "$title" "$project" "" "done" "$mtime" false "$intent" "$model" "$effort" \
+    report_entry_json "$stem" "report.md" "$file" "$title" "$project" "" "" "$mtime" "$historical" "$intent" "$model" "$effort" \
       >> "$reports_file"
   done < <(find "$redesigns_dir" -mindepth 2 -maxdepth 2 -type f -name '*.md' 2>/dev/null | sort)
 
