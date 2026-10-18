@@ -2158,6 +2158,128 @@ test_secondmate_home_teardown_delivers_final_line_or_refuses() {
   pass "a secondmate home's teardown delivers the child's final line or refuses until it can"
 }
 
+# Build a leased-style secondmate home the real teardown retires through its
+# pooled-slot return path: the home is a genuine detached git worktree of the
+# overridden repo root, carries both identity markers, and is bound in the
+# case registry. Echoes the case dir.
+setup_secondmate_retirement() {
+  local name=$1 case_dir fakebin home
+  case_dir="$TMP_ROOT/$name"
+  fakebin="$case_dir/fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$case_dir/data" "$fakebin"
+  # Recording fake treehouse: the return exit code comes from
+  # FM_TEARDOWN_TEST_TREEHOUSE_RC so one fixture drives both outcomes.
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+printf 'treehouse %s\n' "$*" >> "${FM_TEARDOWN_TEST_CASE:?}/treehouse.log"
+exit "${FM_TEARDOWN_TEST_TREEHOUSE_RC:-0}"
+SH
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  cat > "$fakebin/gh-axi" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr list") printf '%s\n' "count: 0 (showing first 0)" "pull_requests[]: []" ; exit 0 ;;
+  "pr view") echo "error: pull request not found" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  cat > "$fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case "${1:-} ${2:-}" in
+  "pr view") echo "error: pull request not found" >&2 ; exit 1 ;;
+esac
+exit 0
+SH
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_FAKE_AXI_STATUS:-}"
+exit 0
+SH
+  chmod +x "$fakebin/treehouse" "$fakebin/tmux" "$fakebin/gh-axi" "$fakebin/gh" "$fakebin/no-mistakes"
+  git init -q -b main "$case_dir/project"
+  git -C "$case_dir/project" commit -q --allow-empty -m init
+  git -C "$case_dir/project" worktree add -q --detach "$case_dir/mate-home" main
+  home="$case_dir/mate-home"
+  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  printf 'mate-x\n' > "$home/.fm-secondmate-home"
+  {
+    printf 'schema=fm-secondmate-parent.v1\n'
+    printf 'route=local\n'
+    printf 'parent_home=%s\n' "$case_dir/project"
+  } > "$home/.fm-secondmate-parent"
+  fm_write_meta "$case_dir/state/mate-x.meta" \
+    "window=fake:fm-mate-x" \
+    "endpoint_task_id=mate-x" \
+    "worktree=$home" \
+    "project=$home" \
+    "backend=tmux" \
+    "kind=secondmate" \
+    "mode=secondmate" \
+    "yolo=off" \
+    "home=$home" \
+    "projects=alpha" \
+    "spawn_gen=teardown-test-mate-x"
+  printf -- '- mate-x - fixture scope (home: %s; scope: fixture; projects: alpha; added 2026-07-14)\n' \
+    "$home" > "$case_dir/data/secondmates.md"
+  touch "$case_dir/state/.last-watcher-beat"
+  printf '%s\n' "$case_dir"
+}
+
+run_mate_teardown() {
+  local case_dir=$1; shift
+  FM_TEARDOWN_TEST_CASE="$case_dir" \
+  FM_HOME="$case_dir/project" \
+  FM_ROOT_OVERRIDE="$case_dir/project" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
+    "$TEARDOWN" mate-x "$@"
+}
+
+test_secondmate_retirement_sweeps_markers_before_pool_return() {
+  local case_dir home rc
+  case_dir=$(setup_secondmate_retirement mate-retire-sweep)
+  home="$case_dir/mate-home"
+  [ -f "$home/.fm-secondmate-home" ] && [ -f "$home/.fm-secondmate-parent" ] \
+    || fail "mate-retire-sweep: the fixture home is missing its identity markers"
+  set +e
+  FM_TEARDOWN_TEST_TREEHOUSE_RC=0 run_mate_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "mate-retire-sweep: teardown should succeed: $(cat "$case_dir/stderr")"
+  grep -q 'treehouse return --force' "$case_dir/treehouse.log" \
+    || fail "mate-retire-sweep: the pooled-slot return was never attempted"
+  [ ! -e "$home/.fm-secondmate-home" ] && [ ! -e "$home/.fm-secondmate-parent" ] \
+    || fail "mate-retire-sweep: the retired home's markers survived the pooled-slot return"
+  [ ! -e "$case_dir/state/mate-x.meta" ] \
+    || fail "mate-retire-sweep: teardown left the secondmate record"
+  pass "a secondmate retirement moves its markers aside before the pooled-slot return and drops them on success"
+}
+
+test_secondmate_retirement_restores_markers_when_pool_return_fails() {
+  local case_dir home rc
+  case_dir=$(setup_secondmate_retirement mate-retire-restore)
+  home="$case_dir/mate-home"
+  set +e
+  FM_TEARDOWN_TEST_TREEHOUSE_RC=1 run_mate_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "mate-retire-restore: teardown proceeded after a failed pool return"
+  grep -q 'treehouse return failed' "$case_dir/stderr" \
+    || fail "mate-retire-restore: the failure did not name the pool return: $(cat "$case_dir/stderr")"
+  [ "$(cat "$home/.fm-secondmate-home")" = mate-x ] \
+    || fail "mate-retire-restore: the failed return did not restore the identity marker"
+  grep -q '^route=local$' "$home/.fm-secondmate-parent" \
+    || fail "mate-retire-restore: the failed return did not restore the parent marker"
+  [ -d "$home" ] && [ -f "$case_dir/state/mate-x.meta" ] \
+    || fail "mate-retire-restore: the failed return did not leave the leased home intact"
+  pass "a secondmate retirement restores its markers when the pooled-slot return fails"
+}
+
 test_teardown_missing_busy_sidecar_completes() {
   local case_dir gen rc
   case_dir=$(make_case missing-busy-sidecar)
@@ -4306,6 +4428,8 @@ test_no_mistakes_truly_unpushed_refuses
 test_local_only_force_overrides_unpushed
 test_secondmate_pr_registration_publishes_ready_line
 test_secondmate_home_teardown_delivers_final_line_or_refuses
+test_secondmate_retirement_sweeps_markers_before_pool_return
+test_secondmate_retirement_restores_markers_when_pool_return_fails
 test_teardown_missing_busy_sidecar_completes
 test_herdr_teardown_clears_escalation_marker
 test_herdr_flat_teardown_refuses_orphaning_records_then_retry_completes

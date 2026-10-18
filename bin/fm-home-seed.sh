@@ -601,6 +601,9 @@ seed_return_treehouse_home() {
     echo "warning: failed to return treehouse-acquired home $abs_home during seed rollback; lease may still be held" >&2
     return 0
   }
+  # A marker written before the failure survives `treehouse return` inside the
+  # pooled slot, so sweep it now that the return succeeded.
+  rm -f -- "$abs_home/.fm-secondmate-home" "$abs_home/.fm-secondmate-parent" 2>/dev/null || true
 }
 
 seed_remove_created_home() {

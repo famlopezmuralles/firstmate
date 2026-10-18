@@ -93,6 +93,14 @@ function markLoaded(): void {
   writeFileSync(marker, `${extensionVersion}\n${process.pid}\n`);
 }
 
+// Workers keep their role and only take steering from firstmate: FM_TASK_ID
+// is exported only for ship and scout launches, never for a secondmate or
+// primary session, so a session carrying it never takes the helm here. The
+// wrappers enforce the same stand-down; this skips even spawning the hook.
+function isWorkerSession(): boolean {
+  return (process.env.FM_TASK_ID ?? "").length > 0;
+}
+
 const sessionstartDeliveryBytes = 512 * 1024;
 
 type SessionStartContext = {
@@ -543,6 +551,7 @@ export default function (pi: ExtensionAPI) {
       ? (launchResumeSource() ?? "startup")
       : "clear";
     markLoaded();
+    if (isWorkerSession()) return;
     registerSessionstartExitListener();
     sessionstartGeneration = createSessionstartGeneration(source, sessionIdFromContext(ctx));
   });
@@ -558,6 +567,7 @@ export default function (pi: ExtensionAPI) {
   // is idle and auto-compaction may retry without another before_agent_start,
   // so the message is sent directly while sharing generation ownership.
   pi.on?.("session_compact", async (_event, ctx) => {
+    if (isWorkerSession()) return;
     registerSessionstartExitListener();
     const generation = createSessionstartGeneration("compact", sessionIdFromContext(ctx));
     sessionstartGeneration = generation;

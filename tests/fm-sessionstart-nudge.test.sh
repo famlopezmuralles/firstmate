@@ -115,6 +115,51 @@ test_linked_secondmate_primary_nudges() {
   pass "fm-sessionstart-nudge: a marked linked secondmate home is a primary"
 }
 
+test_worker_mark_is_silent() {
+  local root="$TMP_ROOT/worker-mark" out status=0
+  make_primary "$root"
+  printf 'stale-mate\n' > "$root/.fm-secondmate-home"
+  # Non-vacuity: the stale marker is otherwise a valid home, so the silence
+  # below comes from the worker mark rather than an invalid fixture.
+  out=$(env -u FM_TASK_ID FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE") || status=$?
+  expect_code 0 "$status" "stale marker nudge without worker mark"
+  [ "$out" = "$NUDGE_LINE" ] || fail "a valid marker without a worker mark did not nudge, got: $out"
+  expect_silent_zero "worker mark nudge" env FM_TASK_ID=session-start-worker-guard FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
+  pass "fm-sessionstart-nudge: a worker session stays silent even with a stale secondmate marker"
+}
+
+test_stale_marker_in_claimed_pool_slot_is_silent() {
+  local pool="$TMP_ROOT/pool" base="$TMP_ROOT/pool-base" root="$TMP_ROOT/pool/slot-1/firstmate"
+  local out status=0
+  fm_git_worktree "$base" "$root" fm/pool-stale-marker
+  mkdir -p "$root/bin" "$root/state"
+  : > "$root/AGENTS.md"
+  printf 'retired-mate\n' > "$root/.fm-secondmate-home"
+  # Non-vacuity: the marked linked home nudges before the slot is claimed,
+  # so the silence below comes from the worker-slot claim.
+  out=$(env -u FM_TASK_ID FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE") || status=$?
+  expect_code 0 "$status" "marked pool slot nudge before claim"
+  [ "$out" = "$NUDGE_LINE" ] || fail "a marked pool slot without a worker claim did not nudge, got: $out"
+  printf 'task=%s\nhome=%s\n' 'some-worker' "$TMP_ROOT/pool-owner-home" > "$pool/slot-1/.fm-slot-owner"
+  expect_silent_zero "claimed pool slot nudge" env -u FM_TASK_ID FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
+  pass "fm-sessionstart-nudge: a stale marker in a worker-claimed pool slot is not a home"
+}
+
+test_worker_mark_in_linked_secondmate_home_is_silent() {
+  local base="$TMP_ROOT/worker-linked-base" root="$TMP_ROOT/worker-linked-home" out status=0
+  fm_git_worktree "$base" "$root" fm/worker-linked-secondmate
+  mkdir -p "$root/bin" "$root/state"
+  : > "$root/AGENTS.md"
+  printf 'live-mate\n' > "$root/.fm-secondmate-home"
+  # Non-vacuity: without the worker mark this marked linked home is a
+  # primary and nudges, so the silence below comes from the mark alone.
+  out=$(env -u FM_TASK_ID FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE") || status=$?
+  expect_code 0 "$status" "marked linked home nudge without worker mark"
+  [ "$out" = "$NUDGE_LINE" ] || fail "a marked linked home without a worker mark did not nudge, got: $out"
+  expect_silent_zero "linked worker mark nudge" env FM_TASK_ID=session-start-worker-guard FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" "$NUDGE"
+  pass "fm-sessionstart-nudge: a worker mark stands down before any marker is accepted"
+}
+
 test_missing_state_is_silent() {
   local root="$TMP_ROOT/missing-state"
   make_primary "$root"
@@ -451,6 +496,68 @@ JS
   [ "$actual" = "$expected" ] \
     || fail "Pi continuation classification produced unexpected sources: $actual"
   pass "Pi distinguishes header-proven restored CLI sessions from named create-if-missing startups"
+}
+
+test_pi_worker_session_spawns_no_sessionstart() {
+  local fixture out status=0
+  command -v node >/dev/null 2>&1 || {
+    echo "skip: node not found for Pi worker session test"
+    return 0
+  }
+  fixture="$TMP_ROOT/pi-worker-session"
+  mkdir -p "$fixture/.pi/extensions/lib" "$fixture/bin" "$fixture/state"
+  cp "$ROOT/.pi/extensions/fm-primary-turnend-guard.ts" "$fixture/.pi/extensions/"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$ROOT/.pi/extensions/lib/fm-sessionstart-supervisor.mjs" "$fixture/.pi/extensions/lib/"
+  cat > "$fixture/bin/fm-sessionstart-run.sh" <<'SH'
+#!/usr/bin/env bash
+source_name=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --source) source_name=${2:-}; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\n' "$source_name" >> "${FM_HOME:?}/state/sources"
+SH
+  cat > "$fixture/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fixture/bin/"*.sh
+  out=$(EXT="$fixture/.pi/extensions/fm-primary-turnend-guard.ts" FM_HOME="$fixture" FM_ROOT_OVERRIDE="$fixture" node --input-type=module 2>&1 <<'JS'
+import { existsSync, readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const handlers = new Map();
+const pi = {
+  on(event, handler) { handlers.set(event, handler); },
+  sendMessage() {},
+};
+const extension = await import(`${pathToFileURL(process.env.EXT).href}?worker=${Date.now()}`);
+extension.default(pi);
+process.argv.splice(1, process.argv.length, "pi");
+const ctx = (sessionId) => ({
+  sessionManager: {
+    getHeader: () => ({ timestamp: new Date().toISOString() }),
+    getSessionId: () => sessionId,
+  },
+});
+process.env.FM_TASK_ID = "session-start-worker-guard";
+handlers.get("session_start")({ reason: "startup" }, ctx("worker-startup"));
+handlers.get("session_start")({ reason: "resume" }, ctx("worker-resume"));
+await handlers.get("session_compact")({}, ctx("worker-startup"));
+const workerCall = await handlers.get("before_agent_start")({ prompt: "worker resume" }, ctx("worker-resume"));
+if (workerCall !== undefined) throw new Error("a worker session was handed a session-start message");
+if (existsSync(`${process.env.FM_HOME}/state/sources`)) throw new Error("a worker session spawned the session-start hook");
+delete process.env.FM_TASK_ID;
+handlers.get("session_start")({ reason: "startup" }, ctx("primary-startup"));
+await handlers.get("before_agent_start")({ prompt: "primary" }, ctx("primary-startup"));
+const actual = readFileSync(`${process.env.FM_HOME}/state/sources`, "utf8").trim();
+if (actual !== "startup") throw new Error(`the primary session lost its hook after the worker stand-down: ${actual}`);
+JS
+  ) || status=$?
+  expect_code 0 "$status" "Pi worker session stand-down"
+  [ -z "$out" ] || fail "Pi worker session stand-down printed output: $out"
+  pass "Pi spawns no session start for a worker session on startup, resume, or compaction"
 }
 
 test_pi_sessionstart_generation_prerequisite() {
@@ -1012,6 +1119,33 @@ test_run_unknown_source_takes_the_helm() {
   pass "run wrapper: an unrecognized or absent source takes the helm rather than skipping it"
 }
 
+test_run_worker_and_stale_pool_slot_are_silent() {
+  local root="$TMP_ROOT/run-worker" pool_base="$TMP_ROOT/run-pool-base" pool_root="$TMP_ROOT/run-pool/slot-1/firstmate"
+  local out status=0
+  make_run_primary "$root"
+  printf 'stale-mate\n' > "$root/.fm-secondmate-home"
+  rmdir "$root/state"
+  expect_silent_zero "worker mark run" env FM_TASK_ID=session-start-worker-guard FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" --source startup
+  assert_absent "$root/state" "a worker session open manufactured a state dir"
+  assert_absent "$root/state/.lock" "a worker session open took the fleet lock"
+  status=0
+  out=$(env FM_TASK_ID=session-start-worker-guard FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$root" FM_HOME="$root" PATH="$RUN_PATH" "$RUN" --source startup --pi-prerequisite 2>&1) || status=$?
+  expect_code 3 "$status" "worker mark Pi prerequisite stand-down"
+  [ -z "$out" ] || fail "worker mark Pi prerequisite stand-down must be silent, got: $out"
+  fm_git_worktree "$pool_base" "$pool_root" fm/run-pool-stale
+  mkdir -p "$pool_root/bin" "$pool_root/state"
+  : > "$pool_root/AGENTS.md"
+  printf 'retired-mate\n' > "$pool_root/.fm-secondmate-home"
+  printf 'task=%s\nhome=%s\n' 'some-worker' "$TMP_ROOT/run-pool-owner-home" > "$TMP_ROOT/run-pool/slot-1/.fm-slot-owner"
+  expect_silent_zero "claimed pool slot run" env -u FM_TASK_ID FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$pool_root" FM_HOME="$pool_root" PATH="$RUN_PATH" "$RUN" --source startup
+  status=0
+  out=$(env -u FM_TASK_ID FM_GATE_REFUSE_BYPASS=0 FM_ROOT_OVERRIDE="$pool_root" FM_HOME="$pool_root" PATH="$RUN_PATH" "$RUN" --source startup --pi-prerequisite 2>&1) || status=$?
+  expect_code 3 "$status" "claimed pool slot Pi prerequisite stand-down"
+  [ -z "$out" ] || fail "claimed pool slot Pi prerequisite stand-down must be silent, got: $out"
+  assert_absent "$pool_root/state/.lock" "a stale-marked pool slot still took the fleet lock"
+  pass "run wrapper: a worker resume and a stale-marked pool slot run no session start"
+}
+
 test_run_gate_and_scope_are_silent() {
   local root="$TMP_ROOT/run-gate" base="$TMP_ROOT/run-linked-base" linked="$TMP_ROOT/run-linked"
   local out status=0
@@ -1099,6 +1233,9 @@ test_gate_env_is_silent
 test_gate_common_dir_is_silent
 test_unmarked_linked_worktree_is_silent
 test_linked_secondmate_primary_nudges
+test_worker_mark_is_silent
+test_worker_mark_in_linked_secondmate_home_is_silent
+test_stale_marker_in_claimed_pool_slot_is_silent
 test_missing_state_is_silent
 test_owned_lock_is_silent
 test_namespace_pid1_lock_holder_is_silent
@@ -1113,10 +1250,12 @@ test_run_resume_delegates_to_the_nudge
 test_run_reads_source_from_the_hook_payload
 test_run_unknown_source_takes_the_helm
 test_run_gate_and_scope_are_silent
+test_run_worker_and_stale_pool_slot_are_silent
 test_run_creates_missing_state_on_a_fresh_primary
 test_run_reports_a_state_dir_it_cannot_create
 test_run_reports_a_failed_session_start_as_digest_text
 test_pi_startup_classifies_cli_continuations
+test_pi_worker_session_spawns_no_sessionstart
 test_pi_sessionstart_generation_prerequisite
 test_pi_reload_releases_sessionstart_exit_listener
 test_pi_large_sessionstart_digest_is_delivered_loudly
