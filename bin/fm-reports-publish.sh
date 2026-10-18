@@ -7,7 +7,9 @@
 #   fm-reports-publish.sh install-cron
 #
 # `publish` (the default) is the recurring refresh: it scans this home's own
-# data/ tree and every registered secondmate home for worker reports, enriches
+# data/ tree, every registered secondmate home, and the optional
+# $HOME/redesigns/<project>/*.md source (overridden with FM_REDESIGNS_DIR)
+# for worker reports, enriches
 # each with backlog context through bin/fm-fleet-snapshot.sh (never a second
 # backlog parser), and hands a discovery manifest to fm-reports-render.py, which
 # organizes published reports by project under the publish root (persisting only
@@ -39,6 +41,9 @@
 # captain-hold decision records, and firstmate-authored steering notes), and
 # except a non-regular-file (symlink) entry. Superseded variants (a filename
 # containing "prior" or "before") are still published, marked historical.
+# The optional redesigns source publishes any *.md file directly inside each
+# $HOME/redesigns/<project>/ directory under the same deny-list, grouped by
+# directory basename with no backlog enrichment; prior/before stems stay marked historical.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
