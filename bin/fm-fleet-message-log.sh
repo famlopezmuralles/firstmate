@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# fm-fleet-message-log.sh - render the firstmate<->crew message exchange as one local read-only transcript page.
+# fm-fleet-message-log.sh - render the firstmate<->crew message exchange as a local live transcript page.
 #
 # This script owns the fleet message-log page contract: which durable records
 # it reads, how it derives each entry's direction, timestamp, correlation id,
-# and steer delivery state, and where the generated page lives.
+# and steer delivery state, and how the page stays live.
 # bin/fm-task-inbox-lib.sh owns the inbox record format this script parses;
 # bin/fm-classify-lib.sh owns status-line syntax; neither is restated here.
 #
@@ -21,18 +21,23 @@
 # ladder sidecars (.ring-state rung count, .escalated escalation marker,
 # .retry-ring retry marker) when they name that record.
 #
-# Output is one self-contained index.html with no external references, so the
-# page works offline and phones nothing home. Message bodies can hold private
-# project and customer details: output defaults to gitignored data/ and must
-# never be committed. Any server binds 127.0.0.1 only.
+# Modes: --serve runs a loopback-only HTTP server as the main mode. The page
+# polls its /events.json every --refresh seconds and re-renders in place, so
+# new messages appear without a manual reload and the agent filter and search
+# text are preserved across polls. A plain build (no --serve) writes one
+# self-contained index.html snapshot with the same renderer as a secondary
+# option. Both modes phone nothing home: the page has no external references.
+# Message bodies can hold private project and customer details: output
+# defaults to gitignored data/ and must never be committed. Any server binds
+# 127.0.0.1 only and refuses anything else.
 #
 # Usage:
 #   fm-fleet-message-log.sh [--state-dir DIR] [--out DIR] [--refresh SECS] [--serve [--port PORT]]
 #
 #   --state-dir DIR  read inboxes and status logs from DIR (default $FM_HOME/state)
-#   --out DIR        write index.html into DIR (default $FM_HOME/data/fleet-message-log)
-#   --refresh SECS   page auto-refresh interval, 0 disables (default 60)
-#   --serve          serve the output dir over HTTP bound to 127.0.0.1 (default port 8471)
+#   --out DIR        build writes index.html into DIR (default $FM_HOME/data/fleet-message-log)
+#   --refresh SECS   page poll interval, 0 disables live polling (default 5)
+#   --serve          serve the transcript over HTTP bound to 127.0.0.1 (default port 8471)
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +46,7 @@ FM_HOME="${FM_HOME:-$FM_ROOT}"
 
 STATE_DIR="$FM_HOME/state"
 OUT_DIR="$FM_HOME/data/fleet-message-log"
-REFRESH=60
+REFRESH=5
 SERVE=0
 PORT=8471
 
@@ -68,13 +73,21 @@ case "$PORT" in ''|*[!0-9]*) echo "fm-fleet-message-log: --port must be a number
 command -v python3 >/dev/null 2>&1 || { echo "fm-fleet-message-log: python3 not found" >&2; exit 1; }
 mkdir -p "$OUT_DIR"
 
-python3 - "$STATE_DIR" "$OUT_DIR/index.html" "$REFRESH" <<'PYEOF'
+run_py() {
+  python3 - "$@" <<'PYEOF'
 import html
+import json
 import os
 import re
 import sys
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-state_dir, out_path, refresh = sys.argv[1], sys.argv[2], sys.argv[3]
+MODE = sys.argv[1]
+STATE_DIR = sys.argv[2]
+REFRESH = sys.argv[3]
+if MODE == "serve":
+    PORT = int(sys.argv[4])
 
 CORR_RE = re.compile(r"corr=([0-9A-Za-z][0-9A-Za-z-]{5,})")
 AT_RE = re.compile(r"\[at=(\d+)\]")
@@ -102,13 +115,12 @@ def parse_msg(path):
     epoch = None
     if at:
         try:
-            from datetime import datetime, timezone
             epoch = datetime.fromisoformat(at.replace("Z", "+00:00")).timestamp()
         except ValueError:
             epoch = None
     if epoch is None:
         epoch = os.path.getmtime(path)
-    return body.strip(), at, epoch
+    return body.strip(), epoch
 
 
 def read_sidecar(path):
@@ -119,107 +131,6 @@ def read_sidecar(path):
         return ""
 
 
-agents = set()
-for name in os.listdir(state_dir):
-    if name.startswith("."):
-        continue
-    full = os.path.join(state_dir, name)
-    if name.endswith(".inbox") and os.path.isdir(full):
-        agents.add(name[:-len(".inbox")])
-    elif name.endswith(".status") and os.path.isfile(full):
-        agents.add(name[:-len(".status")])
-
-entries = {}
-for agent in sorted(agents):
-    inbox = os.path.join(state_dir, agent + ".inbox")
-    status_path = os.path.join(state_dir, agent + ".status")
-    meta_path = os.path.join(state_dir, agent + ".meta")
-    kind = ""
-    try:
-        with open(meta_path, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if line.startswith("kind="):
-                    kind = line[len("kind="):].strip()
-                    break
-    except OSError:
-        pass
-    rows = []
-    if os.path.isdir(inbox):
-        ring = {}
-        for line in read_sidecar(os.path.join(inbox, ".ring-state")).splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                ring[parts[0]] = parts[1]
-        escalated = read_sidecar(os.path.join(inbox, ".escalated"))
-        retry = read_sidecar(os.path.join(inbox, ".retry-ring"))
-        handled_dir = os.path.join(inbox, "handled")
-        pending = sorted(
-            f for f in os.listdir(inbox)
-            if f.endswith(".msg") and os.path.isfile(os.path.join(inbox, f))
-        )
-        handled = []
-        if os.path.isdir(handled_dir):
-            handled = sorted(
-                f for f in os.listdir(handled_dir)
-                if f.endswith(".msg") and os.path.isfile(os.path.join(handled_dir, f))
-            )
-        for fname in pending:
-            body, at, epoch = parse_msg(os.path.join(inbox, fname))
-            state = "pending"
-            quals = []
-            if fname in ring:
-                quals.append("rung %sx" % ring[fname])
-            if escalated == fname:
-                quals.append("escalated")
-            if retry == fname:
-                quals.append("retry-owed")
-            if "delivery=fire-and-forget" in body or body.startswith("delivery="):
-                state = "fire-and-forget"
-            if quals:
-                state += " (" + ", ".join(quals) + ")"
-            m = CORR_RE.search(body)
-            rows.append({
-                "direction": "out", "epoch": epoch, "at": at,
-                "corr": m.group(1) if m else "", "state": state,
-                "body": body, "seq": fname,
-            })
-        for fname in handled:
-            body, at, epoch = parse_msg(os.path.join(handled_dir, fname))
-            m = CORR_RE.search(body)
-            rows.append({
-                "direction": "out", "epoch": epoch, "at": at,
-                "corr": m.group(1) if m else "", "state": "handled",
-                "body": body, "seq": fname,
-            })
-    try:
-        with open(status_path, encoding="utf-8", errors="replace") as fh:
-            lines = [ln.rstrip("\n") for ln in fh if ln.strip()]
-    except OSError:
-        lines = []
-    mtime = os.path.getmtime(status_path) if os.path.isfile(status_path) else 0
-    for line in lines:
-        m = AT_RE.search(line)
-        epoch = float(m.group(1)) if m else mtime
-        c = CORR_RE.search(line)
-        k = KEY_RE.search(line)
-        v = VERB_RE.search(line)
-        rows.append({
-            "direction": "in", "epoch": epoch, "at": None,
-            "corr": c.group(1) if c else "", "state": v.group(1) if v else "note",
-            "body": line, "seq": k.group(1) if k else "",
-        })
-    rows.sort(key=lambda r: r["epoch"], reverse=True)
-    entries[agent] = {"kind": kind, "rows": rows}
-
-ordered = sorted(
-    entries.items(),
-    key=lambda kv: (max([r["epoch"] for r in kv[1]["rows"]] or [0]), kv[0]),
-    reverse=True,
-)
-
-from datetime import datetime, timezone
-
-
 def fmt_ts(epoch):
     try:
         return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -227,18 +138,102 @@ def fmt_ts(epoch):
         return "unknown"
 
 
-def chip(text, cls):
-    return '<span class="chip %s">%s</span>' % (cls, html.escape(text)) if text else ""
+def collect(state_dir):
+    agents = set()
+    for name in os.listdir(state_dir):
+        if name.startswith("."):
+            continue
+        full = os.path.join(state_dir, name)
+        if name.endswith(".inbox") and os.path.isdir(full):
+            agents.add(name[:-len(".inbox")])
+        elif name.endswith(".status") and os.path.isfile(full):
+            agents.add(name[:-len(".status")])
+    payload_agents = []
+    for agent in sorted(agents):
+        inbox = os.path.join(state_dir, agent + ".inbox")
+        status_path = os.path.join(state_dir, agent + ".status")
+        kind = ""
+        try:
+            with open(os.path.join(state_dir, agent + ".meta"),
+                      encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    if line.startswith("kind="):
+                        kind = line[len("kind="):].strip()
+                        break
+        except OSError:
+            pass
+        rows = []
+        if os.path.isdir(inbox):
+            ring = {}
+            for line in read_sidecar(os.path.join(inbox, ".ring-state")).splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    ring[parts[0]] = parts[1]
+            escalated = read_sidecar(os.path.join(inbox, ".escalated"))
+            retry = read_sidecar(os.path.join(inbox, ".retry-ring"))
+            pending = sorted(
+                f for f in os.listdir(inbox)
+                if f.endswith(".msg") and os.path.isfile(os.path.join(inbox, f))
+            )
+            handled_dir = os.path.join(inbox, "handled")
+            handled = []
+            if os.path.isdir(handled_dir):
+                handled = sorted(
+                    f for f in os.listdir(handled_dir)
+                    if f.endswith(".msg") and os.path.isfile(os.path.join(handled_dir, f))
+                )
+            for fname in pending:
+                body, epoch = parse_msg(os.path.join(inbox, fname))
+                state = "pending"
+                quals = []
+                if fname in ring:
+                    quals.append("rung %sx" % ring[fname])
+                if escalated == fname:
+                    quals.append("escalated")
+                if retry == fname:
+                    quals.append("retry-owed")
+                if "delivery=fire-and-forget" in body:
+                    state = "fire-and-forget"
+                if quals:
+                    state += " (" + ", ".join(quals) + ")"
+                m = CORR_RE.search(body)
+                rows.append({"dir": "out", "epoch": epoch, "ts": fmt_ts(epoch),
+                             "corr": m.group(1) if m else "", "state": state,
+                             "body": body})
+            for fname in handled:
+                body, epoch = parse_msg(os.path.join(handled_dir, fname))
+                m = CORR_RE.search(body)
+                rows.append({"dir": "out", "epoch": epoch, "ts": fmt_ts(epoch),
+                             "corr": m.group(1) if m else "", "state": "handled",
+                             "body": body})
+        try:
+            with open(status_path, encoding="utf-8", errors="replace") as fh:
+                lines = [ln.rstrip("\n") for ln in fh if ln.strip()]
+        except OSError:
+            lines = []
+        mtime = os.path.getmtime(status_path) if os.path.isfile(status_path) else 0
+        for line in lines:
+            m = AT_RE.search(line)
+            epoch = float(m.group(1)) if m else mtime
+            c = CORR_RE.search(line)
+            v = VERB_RE.search(line)
+            rows.append({"dir": "in", "epoch": epoch, "ts": fmt_ts(epoch),
+                         "corr": c.group(1) if c else "",
+                         "state": v.group(1) if v else "note", "body": line})
+        rows.sort(key=lambda r: r["epoch"], reverse=True)
+        payload_agents.append({"id": agent, "kind": kind, "rows": rows})
+    payload_agents.sort(
+        key=lambda a: (max([r["epoch"] for r in a["rows"]] or [0]), a["id"]),
+        reverse=True)
+    return {"generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "agents": payload_agents}
 
 
-parts = []
-parts.append("<!DOCTYPE html>")
-parts.append('<html lang="en"><head><meta charset="utf-8">')
-parts.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
-if refresh != "0":
-    parts.append('<meta http-equiv="refresh" content="%d">' % int(refresh))
-parts.append("<title>Fleet message log</title>")
-parts.append("""<style>
+PAGE_TEMPLATE = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet message log</title>
+<style>
 body{font-family:system-ui,sans-serif;max-width:70rem;margin:0 auto;padding:1rem;color:#111}
 .controls{position:sticky;top:0;background:#fff;padding:.5rem 0;border-bottom:1px solid #ddd;display:flex;gap:.75rem;flex-wrap:wrap;align-items:center}
 .controls input,.controls select{font-size:1rem;padding:.25rem .5rem}
@@ -251,44 +246,65 @@ body{font-family:system-ui,sans-serif;max-width:70rem;margin:0 auto;padding:1rem
 .dir-out{color:#1d4ed8}.dir-in{color:#15803d}
 h2 .kind{color:#666;font-weight:normal;font-size:.9rem}
 .note{color:#555;font-size:.9rem}
-</style></head><body>""")
-parts.append("<h1>Fleet message log</h1>")
-parts.append('<p class="note">Read-only transcript of firstmate steering records and crew status reports. Local file only, never published. Generated {now} UTC. Auto-refresh: {r}.</p>'.format(
-    now=html.escape(datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
-    r=("every %s s" % html.escape(refresh)) if refresh != "0" else "off",
-))
-parts.append("""<div class="controls">
-<label>Agent <select id="agent"><option value="">All agents</option>""")
-for agent, info in ordered:
-    label = agent + (" (%s)" % info["kind"] if info["kind"] else "")
-    parts.append('<option value="%s">%s</option>' % (html.escape(agent), html.escape(label)))
-parts.append("""</select></label>
+#live{font-weight:bold}
+#live.stale{color:#b45309}
+</style></head><body>
+<h1>Fleet message log</h1>
+<p class="note">Read-only transcript of firstmate steering records and crew status reports. Local only, never published. <span id="live">live</span> <span id="stamp"></span></p>
+<div class="controls">
+<label>Agent <select id="agent"><option value="">All agents</option></select></label>
 <label>Direction <select id="dir"><option value="">Both</option><option value="out">Firstmate to agent</option><option value="in">Agent to firstmate</option></select></label>
 <label>Search <input id="q" type="search" placeholder="free text or corr id"></label>
-</div>""")
-parts.append('<p class="note" id="count"></p>')
-for agent, info in ordered:
-    label = html.escape(agent + (" · " + info["kind"] if info["kind"] else ""))
-    parts.append('<section data-agent="%s"><h2>%s <span class="kind">%d entries</span></h2>' % (
-        html.escape(agent), label, len(info["rows"])))
-    if not info["rows"]:
-        parts.append('<p class="note">No inbox records or status lines.</p>')
-    for r in info["rows"]:
-        dlabel = "Firstmate to agent" if r["direction"] == "out" else "Agent to firstmate"
-        parts.append('<article class="entry %s" data-dir="%s" data-corr="%s" data-state="%s">' % (
-            r["direction"], r["direction"],
-            html.escape(r["corr"]), html.escape(r["state"])))
-        parts.append('<div class="meta"><span class="dir-%s">%s</span><span>%s</span>%s%s</div>' % (
-            r["direction"], dlabel, html.escape(fmt_ts(r["epoch"])),
-            chip(r["corr"], "corr"), chip(r["state"], "state")))
-        parts.append("<pre>%s</pre>" % html.escape(r["body"]))
-        parts.append("</article>")
-    parts.append("</section>")
-parts.append("""<script>
-var agent=document.getElementById('agent'),dir=document.getElementById('dir'),q=document.getElementById('q'),count=document.getElementById('count');
+</div>
+<p class="note" id="count"></p>
+<div id="log"></div>
+<script id="initial" type="application/json">__INITIAL__</script>
+<script>
+var POLL_SECS=__POLL__;
+var agentEl=document.getElementById('agent'),dirEl=document.getElementById('dir'),qEl=document.getElementById('q');
+var logEl=document.getElementById('log'),countEl=document.getElementById('count');
+var stampEl=document.getElementById('stamp'),liveEl=document.getElementById('live');
+function chip(text){if(!text)return null;var s=document.createElement('span');s.className='chip';s.textContent=text;return s;}
+function render(data){
+  var seen={};
+  data.agents.forEach(function(a){seen[a.id]=true;});
+  var cur=agentEl.value;
+  agentEl.querySelectorAll('option[value]:not([value=""])').forEach(function(o){o.remove();});
+  data.agents.forEach(function(a){
+    var o=document.createElement('option');o.value=a.id;
+    o.textContent=a.kind?a.id+' ('+a.kind+')':a.id;agentEl.appendChild(o);
+  });
+  if(seen[cur])agentEl.value=cur;
+  logEl.innerHTML='';
+  data.agents.forEach(function(a){
+    var sec=document.createElement('section');sec.setAttribute('data-agent',a.id);
+    var h=document.createElement('h2');h.textContent=a.id+' ';
+    var k=document.createElement('span');k.className='kind';k.textContent=a.rows.length+' entries';
+    h.appendChild(k);sec.appendChild(h);
+    if(!a.rows.length){var p=document.createElement('p');p.className='note';p.textContent='No inbox records or status lines.';sec.appendChild(p);}
+    a.rows.forEach(function(r){
+      var art=document.createElement('article');
+      art.className='entry '+r.dir;art.setAttribute('data-dir',r.dir);
+      var meta=document.createElement('div');meta.className='meta';
+      var d=document.createElement('span');
+      d.className=r.dir==='out'?'dir-out':'dir-in';
+      d.textContent=r.dir==='out'?'Firstmate to agent':'Agent to firstmate';
+      meta.appendChild(d);
+      var t=document.createElement('span');t.textContent=r.ts;meta.appendChild(t);
+      var c1=chip(r.corr),c2=chip(r.state);
+      if(c1)meta.appendChild(c1);if(c2)meta.appendChild(c2);
+      art.appendChild(meta);
+      var pre=document.createElement('pre');pre.textContent=r.body;art.appendChild(pre);
+      sec.appendChild(art);
+    });
+    logEl.appendChild(sec);
+  });
+  stampEl.textContent='Updated '+data.generated_at+' UTC.';
+  apply();
+}
 function apply(){
-  var a=agent.value.toLowerCase(),d=dir.value,t=q.value.toLowerCase(),n=0;
-  document.querySelectorAll('section[data-agent]').forEach(function(s){
+  var a=agentEl.value.toLowerCase(),d=dirEl.value,t=qEl.value.toLowerCase(),n=0;
+  logEl.querySelectorAll('section[data-agent]').forEach(function(s){
     var vis=0;
     s.querySelectorAll('article.entry').forEach(function(e){
       var ok=(!a||s.getAttribute('data-agent').toLowerCase()===a)&&(!d||e.getAttribute('data-dir')===d)&&(!t||e.textContent.toLowerCase().indexOf(t)>=0);
@@ -296,18 +312,64 @@ function apply(){
     });
     s.style.display=vis?'':'none';
   });
-  count.textContent=n+' entries shown';
+  countEl.textContent=n+' entries shown';
 }
-[agent,dir,q].forEach(function(el){el.addEventListener('input',apply);});
-apply();
-</script></body></html>""")
+[agentEl,dirEl,qEl].forEach(function(el){el.addEventListener('input',apply);});
+render(JSON.parse(document.getElementById('initial').textContent));
+function poll(){
+  fetch('events.json',{cache:'no-store'}).then(function(r){
+    if(!r.ok)throw new Error(r.status);return r.json();
+  }).then(function(data){liveEl.classList.remove('stale');render(data);}).catch(function(){
+    liveEl.textContent='live (disconnected, showing last snapshot)';liveEl.classList.add('stale');
+  });
+}
+if(POLL_SECS>0){__POLLJS__}
+</script></body></html>
+"""
 
-with open(out_path, "w", encoding="utf-8") as fh:
-    fh.write("\n".join(parts) + "\n")
-print("page: %s" % out_path)
+
+def render_page(payload, refresh):
+    initial = json.dumps(payload).replace("<", "\\u003c")
+    polljs = "setInterval(poll,%s*1000);" % refresh if refresh != "0" else ""
+    return PAGE_TEMPLATE.replace("__INITIAL__", initial).replace("__POLL__", refresh).replace("__POLLJS__", polljs)
+
+
+class Handler(BaseHTTPRequestHandler):
+    server_version = "FleetMessageLog/1"
+
+    def log_message(self, *args):
+        pass
+
+    def _send(self, code, ctype, body):
+        data = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype + "; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        if self.path == "/" or self.path.startswith("/index.html"):
+            self._send(200, "text/html", render_page(collect(STATE_DIR), REFRESH))
+        elif self.path == "/events.json":
+            self._send(200, "application/json", json.dumps(collect(STATE_DIR)))
+        else:
+            self._send(404, "text/plain", "not found")
+
+
+if MODE == "serve":
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+else:
+    with open(sys.argv[4], "w", encoding="utf-8") as fh:
+        fh.write(render_page(collect(STATE_DIR), REFRESH) + "\n")
+    print("page: %s" % sys.argv[4])
 PYEOF
+}
 
 if [ "$SERVE" -eq 1 ]; then
   echo "serve: http://127.0.0.1:$PORT/ (loopback only, Ctrl-C to stop)"
-  exec python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$OUT_DIR"
+  run_py serve "$STATE_DIR" "$REFRESH" "$PORT"
+else
+  run_py build "$STATE_DIR" "$REFRESH" "$OUT_DIR/index.html"
 fi

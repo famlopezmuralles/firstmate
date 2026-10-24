@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Behavior tests for bin/fm-fleet-message-log.sh - the local read-only
+# Behavior tests for bin/fm-fleet-message-log.sh - the local live
 # firstmate<->crew transcript page.
 #
 # Cases pin the page contract through behavior only: fixture inboxes and
-# status logs in, rendered transcript HTML out, with the state tree proven
-# untouched, no external references, and the loopback serve path exercised
-# for real over HTTP.
+# status logs in, rendered transcript out, with the state tree proven
+# untouched, no external references, the loopback serve path exercised for
+# real over HTTP, and live updates proven by appending a status line between
+# two /events.json polls.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -30,6 +31,20 @@ write_msg() {  # <path> <at> <body...>
   } > "$path"
 }
 
+fetch() {  # <url> -> prints body
+  python3 -c "import urllib.request,sys; sys.stdout.write(urllib.request.urlopen(sys.argv[1], timeout=5).read().decode())" "$1"
+}
+
+wait_for() {  # <url> -> waits until it answers
+  local i=0
+  while [ "$i" -lt 50 ]; do
+    i=$((i + 1))
+    fetch "$1" >/dev/null 2>&1 && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 test_build_renders_both_directions() {
   local home out html
   home=$(make_home build)
@@ -51,20 +66,20 @@ EOF
     || fail "build must exit 0"
   html="$out/index.html"
   assert_present "$html" "build writes index.html"
-  assert_grep "please explore the API" "$html" "pending steer body renders"
-  assert_grep "earlier instruction" "$html" "handled steer body renders"
-  assert_grep "explored, report at" "$html" "status line renders"
+  assert_grep "please explore the API" "$html" "pending steer body embedded"
+  assert_grep "earlier instruction" "$html" "handled steer body embedded"
+  assert_grep "explored, report at" "$html" "status line embedded"
   assert_grep "Firstmate to agent" "$html" "out direction labels"
   assert_grep "Agent to firstmate" "$html" "in direction labels"
-  assert_grep "aaa111bbb222" "$html" "correlation id renders"
-  assert_grep "handled" "$html" "handled state renders"
-  assert_grep "pending" "$html" "pending state renders"
+  assert_grep "aaa111bbb222" "$html" "correlation id embedded"
+  assert_grep "handled" "$html" "handled state embedded"
   assert_grep "rung 2x" "$html" "ring count derives from .ring-state"
   assert_grep "escalated" "$html" "escalation marker derives from .escalated"
   assert_grep 'id="q"' "$html" "free-text search box renders"
   assert_grep 'id="agent"' "$html" "agent filter renders"
-  assert_grep "secondmate" "$html" "meta kind shows on the agent section"
-  assert_no_grep "http-equiv" "$html" "--refresh 0 disables auto-refresh"
+  assert_grep "secondmate" "$html" "meta kind ships in the payload"
+  assert_grep "events.json" "$html" "page polls the live endpoint"
+  assert_no_grep "setInterval" "$html" "--refresh 0 disables live polling"
   pass "build renders both directions with derived state"
 }
 
@@ -86,34 +101,34 @@ test_state_tree_untouched_and_local_only() {
   assert_no_grep ".hidden" "$html" "dot-prefixed records stay out of the page"
   assert_no_grep "src=\"http" "$html" "no external scripts"
   assert_no_grep "href=\"http" "$html" "no external links"
-  assert_grep "http-equiv" "$html" "default build keeps auto-refresh"
+  assert_grep "setInterval" "$html" "default build keeps live polling"
+  assert_grep "POLL_SECS=5" "$html" "default poll interval is five seconds"
   pass "state tree untouched and page has no external references"
 }
 
-test_serve_binds_loopback() {
-  local home out port py
+test_serve_polls_live_over_loopback() {
+  local home out port server body1 body2 before after
   home=$(make_home serve)
-  printf 'done [at=1792820400]: served line\n' > "$home/state/solo.status"
+  printf 'done [at=1792820400]: first served line\n' > "$home/state/solo.status"
   out="$home/data/logs"
-  "$LOG" --state-dir "$home/state" --out "$out" --refresh 0 >/dev/null \
-    || fail "build must exit 0"
   port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+  before=$(cd "$home/state" && find . | sort)
   "$LOG" --state-dir "$home/state" --out "$out" --serve --port "$port" >/dev/null 2>&1 &
-  py=$!
+  server=$!
   # shellcheck disable=SC2064
-  trap "kill $py 2>/dev/null" EXIT
-  local i body
-  i=0
-  while [ "$i" -lt 50 ]; do
-    i=$((i + 1))
-    body=$(python3 -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:$port/', timeout=2).read().decode())" 2>/dev/null) && break
-    sleep 0.2
-  done
-  kill "$py" 2>/dev/null
+  trap "kill $server 2>/dev/null" EXIT
+  wait_for "http://127.0.0.1:$port/events.json" || fail "server must answer on loopback"
+  body1=$(fetch "http://127.0.0.1:$port/events.json")
+  assert_contains "$body1" "first served line" "first poll carries the transcript"
+  assert_contains "$(fetch "http://127.0.0.1:$port/")" "Fleet message log" "root serves the page"
+  printf 'working [at=1792820500]: second live line\n' >> "$home/state/solo.status"
+  body2=$(fetch "http://127.0.0.1:$port/events.json")
+  assert_contains "$body2" "second live line" "second poll shows the appended line without a rebuild"
+  kill "$server" 2>/dev/null
   trap - EXIT
-  assert_contains "$body" "Fleet message log" "loopback serve answers with the page"
-  assert_contains "$body" "served line" "served page carries the transcript"
-  pass "serve binds loopback and serves the transcript"
+  after=$(cd "$home/state" && find . | sort)
+  assert_equals "$before" "$after" "serve adds no files to state"
+  pass "serve polls live over loopback"
 }
 
 test_bad_inputs_refused() {
@@ -131,5 +146,5 @@ test_bad_inputs_refused() {
 
 test_build_renders_both_directions
 test_state_tree_untouched_and_local_only
-test_serve_binds_loopback
+test_serve_polls_live_over_loopback
 test_bad_inputs_refused
