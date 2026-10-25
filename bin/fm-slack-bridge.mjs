@@ -79,6 +79,12 @@ const MARK_DONE = "white_check_mark";
 const MARK_UNATTENDED = "alarm_clock";
 const CAPTAIN_ACK = "eyes";
 const CAPTAIN_SNOOZE = "zzz";
+const PERMANENT_POST_ERRORS = new Set([
+  "channel_not_found",
+  "is_archived",
+  "not_in_channel",
+  "missing_scope",
+]);
 
 const DEFAULTS = {
   pollSecs: 10,
@@ -145,6 +151,7 @@ function emptyState() {
     noteCoords: {},
     // alert key -> alert record (see postAlert)
     alerts: {},
+    deadReplies: {},
     botUserId: "",
   };
 }
@@ -222,33 +229,34 @@ function requestIdFor(channel, ts) {
 }
 
 async function inboundMessage(cfgv, state, event) {
-  if (!event || event.type !== "message") return;
-  if (event.subtype) return; // edits, joins, deletes - not captain chat
-  if (event.bot_id || !event.user || !event.ts || !event.channel) return;
-  if (!event.text || !event.text.trim()) return;
-  if (!cfgv.allow.includes(event.user)) return; // allow-list: drop silently
+  if (!event || event.type !== "message") return true;
+  if (event.subtype) return true; // edits, joins, deletes - not captain chat
+  if (event.bot_id || !event.user || !event.ts || !event.channel) return true;
+  if (!event.text || !event.text.trim()) return true;
+  if (!cfgv.allow.includes(event.user)) return true; // allow-list: drop silently
 
   const rid = requestIdFor(event.channel, event.ts);
   const res = inbox(["note", "--request-id", rid, "--json", "--", event.text]);
   const json = parseJsonOut(res);
-  if (!json || !json.note_id) {
+  if (!json || !json.id) {
     log(`note failed for ${rid} (exit ${res.status})`);
-    return;
+    return false;
   }
-  state.noteCoords[json.note_id] = { channel: event.channel, ts: event.ts };
+  state.noteCoords[json.id] = { channel: event.channel, ts: event.ts };
   if (res.status === 3) {
     // Saved but the wake append did not confirm; the documented repair.
-    const ann = inbox(["announce", "--json", json.note_id]);
-    log(`note ${json.note_id} ${json.outcome}; announce exit ${ann.status}`);
+    const ann = inbox(["announce", "--json", json.id]);
+    log(`note ${json.id} ${json.outcome}; announce exit ${ann.status}`);
   } else {
-    log(`note ${json.note_id} ${json.outcome} from ${rid}`);
+    log(`note ${json.id} ${json.outcome} from ${rid}`);
   }
+  return true;
 }
 
 // ------------------------------------------------------------ outbound ----
 
 async function replyPass(cfgv, state) {
-  const args = ["receipts", "--all-replies"];
+  const args = ["receipts", "--all-replies", "--all-pending", "--all-handled"];
   if (state.replyCursor) args.push("--after", state.replyCursor);
   const res = inbox(args);
   const json = parseJsonOut(res);
@@ -287,6 +295,16 @@ async function replyPass(cfgv, state) {
         });
         log(`reply for ${reply.id} posted to ${coords.channel} thread ${coords.ts}`);
       } catch (e) {
+        const code = e && e.slack && e.slack.error;
+        if (code && PERMANENT_POST_ERRORS.has(code)) {
+          state.deadReplies = state.deadReplies || {};
+          if (!state.deadReplies[reply.id]) {
+            state.deadReplies[reply.id] = code;
+            log(`reply for ${reply.id} failed permanently (${code}); skipping`);
+          }
+          advanced = reply.cursor;
+          continue;
+        }
         log(`reply post failed for ${reply.id}: ${e.message}`);
         break;
       }
@@ -325,34 +343,37 @@ async function postAlert(cfgv, state, key, cls, channel, text) {
     channel,
     ts: json.ts,
     postedEpoch: Math.floor(Date.now() / 1000),
-    marker: MARK_PENDING,
+    marker: "",
     repeats: 0,
     silenced: false,
     snoozeUntil: 0,
     done: false,
   };
-  await slackApi(cfgv, "reactions.add", {
-    channel,
-    timestamp: json.ts,
-    name: MARK_PENDING,
-  });
   state.alerts[key] = alert;
+  await setMarker(cfgv, alert, MARK_PENDING);
   log(`alert ${key} posted to ${channel} as ${json.ts}`);
   return alert;
+}
+
+async function removeReaction(cfgv, alert, name) {
+  try {
+    await slackApi(cfgv, "reactions.remove", {
+      channel: alert.channel,
+      timestamp: alert.ts,
+      name,
+    });
+    return true;
+  } catch (e) {
+    if (e && e.slack && e.slack.error === "no_reaction") return true;
+    log(`reaction remove failed on ${alert.key}: ${e.message}`);
+    return false;
+  }
 }
 
 async function setMarker(cfgv, alert, marker) {
   if (alert.marker === marker) return;
   if (alert.marker && alert.marker !== MARK_UNATTENDED) {
-    try {
-      await slackApi(cfgv, "reactions.remove", {
-        channel: alert.channel,
-        timestamp: alert.ts,
-        name: alert.marker,
-      });
-    } catch (e) {
-      log(`reaction remove failed on ${alert.key}: ${e.message}`);
-    }
+    if (!(await removeReaction(cfgv, alert, alert.marker))) return;
   }
   if (marker) {
     try {
@@ -370,20 +391,13 @@ async function setMarker(cfgv, alert, marker) {
 }
 
 async function finishAlert(cfgv, alert) {
-  alert.done = true;
   await setMarker(cfgv, alert, MARK_DONE);
+  if (alert.marker !== MARK_DONE) return;
   if (alert.hasAlarm) {
-    try {
-      await slackApi(cfgv, "reactions.remove", {
-        channel: alert.channel,
-        timestamp: alert.ts,
-        name: MARK_UNATTENDED,
-      });
-    } catch {
-      /* already absent */
-    }
+    if (!(await removeReaction(cfgv, alert, MARK_UNATTENDED))) return;
     alert.hasAlarm = false;
   }
+  alert.done = true;
 }
 
 async function readSnapshot() {
@@ -432,6 +446,7 @@ function diskUsedPct(cfgv) {
 // lists it.
 async function reconcileAlerts(cfgv, state, desired, absenceResolves) {
   for (const [key, want] of desired) {
+    try {
     let alert = state.alerts[key];
     if (!alert) {
       // A class that only ever reports resolved (e.g. disk under threshold)
@@ -443,7 +458,14 @@ async function reconcileAlerts(cfgv, state, desired, absenceResolves) {
       await finishAlert(cfgv, alert);
       continue;
     }
-    if (alert.done) continue; // flapped back open: keep the done marker, records will say
+    if (alert.done) {
+      alert.done = false;
+      alert.silenced = false;
+      alert.snoozeUntil = 0;
+      alert.repeats = 0;
+      alert.postedEpoch = Math.floor(Date.now() / 1000);
+      await setMarker(cfgv, alert, MARK_PENDING);
+    }
     const age = Math.floor(Date.now() / 1000) - alert.postedEpoch;
     const snoozed = alert.snoozeUntil > Date.now();
     if (want.progress) {
@@ -452,23 +474,28 @@ async function reconcileAlerts(cfgv, state, desired, absenceResolves) {
       await setMarker(cfgv, alert, MARK_PENDING);
     }
     if (!alert.silenced && !snoozed && age > cfgv.unattendedSecs && alert.repeats < cfgv.repeatMax) {
-      alert.repeats += 1;
-      alert.hasAlarm = true;
       try {
-        await slackApi(cfgv, "reactions.add", {
-          channel: alert.channel,
-          timestamp: alert.ts,
-          name: MARK_UNATTENDED,
-        });
+        if (!alert.hasAlarm) {
+          await slackApi(cfgv, "reactions.add", {
+            channel: alert.channel,
+            timestamp: alert.ts,
+            name: MARK_UNATTENDED,
+          });
+          alert.hasAlarm = true;
+        }
         await slackApi(cfgv, "chat.postMessage", {
           channel: alert.channel,
           thread_ts: alert.ts,
-          text: `Still unattended: ${alert.key} (notice ${alert.repeats}/${cfgv.repeatMax})`,
+          text: `Still unattended: ${alert.key} (notice ${alert.repeats + 1}/${cfgv.repeatMax})`,
         });
+        alert.repeats += 1;
         log(`alert ${key} repeat ${alert.repeats}/${cfgv.repeatMax}`);
       } catch (e) {
         log(`repeat notice failed on ${key}: ${e.message}`);
       }
+    }
+    } catch (e) {
+      log(`alert ${key} reconcile failed: ${e.message}`);
     }
   }
   // Absence resolution: the record owner no longer lists these alerts.
@@ -530,6 +557,14 @@ async function alertPass(cfgv, state) {
       progress: false,
       resolved: pct < cfgv.diskPct,
     });
+  } else if (state.alerts.disk && !state.alerts.disk.done) {
+    desired.set("disk", {
+      cls: "disk",
+      channel: state.alerts.disk.channel,
+      row: null,
+      progress: false,
+      resolved: false,
+    });
   }
   // Wedge alerts resolve when the primary answers the documented readiness
   // read again; each wedge invocation is its own alert.
@@ -566,34 +601,19 @@ async function captainReaction(cfgv, state, reaction, item, user) {
   if (!alert) return;
   if (reaction === CAPTAIN_ACK) {
     if (alert.silenced) return;
-    alert.silenced = true;
     if (alert.hasAlarm) {
-      try {
-        await slackApi(cfgv, "reactions.remove", {
-          channel: alert.channel,
-          timestamp: alert.ts,
-          name: MARK_UNATTENDED,
-        });
-      } catch {
-        /* already absent */
-      }
+      if (!(await removeReaction(cfgv, alert, MARK_UNATTENDED))) return;
       alert.hasAlarm = false;
     }
+    alert.silenced = true;
     log(`alert ${alert.key} silenced by captain reaction`);
   } else if (reaction === CAPTAIN_SNOOZE) {
-    alert.snoozeUntil = Date.now() + cfgv.snoozeSecs * 1000;
+    if (alert.snoozeUntil > Date.now()) return;
     if (alert.hasAlarm) {
-      try {
-        await slackApi(cfgv, "reactions.remove", {
-          channel: alert.channel,
-          timestamp: alert.ts,
-          name: MARK_UNATTENDED,
-        });
-      } catch {
-        /* already absent */
-      }
+      if (!(await removeReaction(cfgv, alert, MARK_UNATTENDED))) return;
       alert.hasAlarm = false;
     }
+    alert.snoozeUntil = Date.now() + cfgv.snoozeSecs * 1000;
     log(`alert ${alert.key} snoozed by captain reaction`);
   }
   // Any other reaction: deliberately ignored.
@@ -621,8 +641,9 @@ async function reactionPass(cfgv, state) {
       const reactions = (json.message && json.message.reactions) || [];
       for (const r of reactions) {
         const users = (r.users || []).filter((u) => u !== state.botUserId);
-        if (users.length === 0) continue;
-        await captainReaction(cfgv, state, r.name, { type: "message", channel: alert.channel, ts: alert.ts }, users[0]);
+        const actor = users.find((u) => cfgv.allow.includes(u));
+        if (!actor) continue;
+        await captainReaction(cfgv, state, r.name, { type: "message", channel: alert.channel, ts: alert.ts }, actor);
       }
     } catch (e) {
       log(`reactions.get failed on ${alert.key}: ${e.message}`);
@@ -635,36 +656,47 @@ async function reactionPass(cfgv, state) {
 async function pollInbound(cfgv, state) {
   for (const channel of cfgv.pollChannels) {
     const cursor = state.channelCursor[channel] || "0";
-    let json;
-    try {
-      json = await slackApi(cfgv, "conversations.history", { channel, oldest: cursor, limit: 50 });
-    } catch (e) {
-      log(`history read failed for ${channel}: ${e.message}`);
-      continue;
+    const pages = [];
+    let pageCursor;
+    let failed = false;
+    for (;;) {
+      let json;
+      try {
+        json = await slackApi(cfgv, "conversations.history", { channel, oldest: cursor, limit: 50, cursor: pageCursor });
+      } catch (e) {
+        log(`history read failed for ${channel}: ${e.message}`);
+        failed = true;
+        break;
+      }
+      for (const m of json.messages || []) pages.push(m);
+      const next = json.has_more && json.response_metadata && json.response_metadata.next_cursor;
+      if (!next) break;
+      pageCursor = next;
     }
-    const msgs = (json.messages || [])
+    if (failed) continue;
+    const msgs = pages
       .filter((m) => m.ts && m.ts > cursor)
       .sort((a, b) => (a.ts < b.ts ? -1 : 1));
     for (const m of msgs) {
       // conversations.history entries carry no event type and no channel of
       // their own; normalize to the message-event shape the inbound handler
       // shares with Socket Mode.
-      await inboundMessage(cfgv, state, { ...m, type: "message", channel });
-    }
-    if (msgs.length > 0) {
-      state.channelCursor[channel] = msgs[msgs.length - 1].ts;
+      const ok = await inboundMessage(cfgv, state, { ...m, type: "message", channel });
+      if (!ok) break;
+      state.channelCursor[channel] = m.ts;
     }
   }
 }
 
 async function handleSocketEvent(cfgv, state, event) {
-  if (!event) return;
+  if (!event) return true;
   if (event.type === "message") {
-    await inboundMessage(cfgv, state, event);
+    return inboundMessage(cfgv, state, event);
   } else if (event.type === "reaction_added") {
     await captainReaction(cfgv, state, event.reaction, event.item, event.user);
   }
   // Everything else (edits, deletes, mentions of the bot) is ignored.
+  return true;
 }
 
 async function socketLoop(cfgv, state, once) {
@@ -698,6 +730,17 @@ async function socketLoop(cfgv, state, once) {
         } catch {
           return;
         }
+        if (env.type === "events_api" && env.payload && env.payload.event && env.payload.event.type === "message") {
+          Promise.resolve()
+            .then(() => handleSocketEvent(cfgv, state, env.payload.event))
+            .then((ok) => {
+              if (ok !== false && env.envelope_id) ws.send(JSON.stringify({ envelope_id: env.envelope_id }));
+            })
+            .catch((e) => {
+              log(`socket inbound failed: ${e.message}`);
+            });
+          return;
+        }
         if (env.envelope_id) {
           ws.send(JSON.stringify({ envelope_id: env.envelope_id }));
         }
@@ -724,10 +767,9 @@ async function socketLoop(cfgv, state, once) {
         clearInterval(timer);
         finish();
       };
-      void tick();
       if (once) {
         // One cycle, then leave: --once is the deterministic test/ops mode.
-        setTimeout(() => {
+        tick().then(() => {
           clearInterval(timer);
           try {
             ws.close();
@@ -735,7 +777,9 @@ async function socketLoop(cfgv, state, once) {
             /* already closed */
           }
           resolve();
-        }, 1500);
+        });
+      } else {
+        void tick();
       }
     });
     if (once) break;
@@ -776,7 +820,7 @@ async function wedge(cfgv, state) {
     log("wedge: no status channel configured; alarm not delivered");
     process.exit(1);
   }
-  const key = `wedge:${Math.floor(Date.now() / 1000)}`;
+  const key = `wedge:${Date.now()}:${process.pid}`;
   await postAlert(cfgv, state, key, "wedge", cfgv.statusChannel, alertText("wedge", null, cfgv, text));
   saveState(state);
 }

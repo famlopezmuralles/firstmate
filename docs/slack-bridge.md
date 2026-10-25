@@ -112,7 +112,7 @@ The alarm summary arrives as `$1` or on stdin and is posted verbatim as the aler
   No package dependency is added; Node >= 21 (the fleet standard runtime is Node 22) is required.
   This transport sees DMs and every configured channel, and receives your reactions live.
 - `poll` (`run --transport poll`): REST polling of `conversations.history` for the configured channels.
-  A fallback for hosts where the websocket will not pass; it does not see DMs, and it reads your reactions back per live alert through `reactions.get`.
+  A fallback for hosts where the websocket will not pass; it does not see DMs, and it does not see captain messages posted inside threads (thread continuations are invisible to poll; Socket Mode sees both), and it reads your reactions back per live alert through `reactions.get`.
 
 ## Security notes
 

@@ -97,9 +97,14 @@ class H(BaseHTTPRequestHandler):
             self.reply({"ok": True, "messages": keep, "has_more": False,
                         "response_metadata": {"next_cursor": ""}})
         elif method == "chat.postMessage":
-            TS_COUNTER[0] += 1
-            self.reply({"ok": True, "channel": params.get("channel", ""),
-                        "ts": str(TS_COUNTER[0]) + ".000001"})
+            for f in cfg.get("post_fails", []):
+                if f.get("thread_ts", "") == params.get("thread_ts", ""):
+                    self.reply({"ok": False, "error": f.get("error", "channel_not_found")})
+                    break
+            else:
+                TS_COUNTER[0] += 1
+                self.reply({"ok": True, "channel": params.get("channel", ""),
+                            "ts": str(TS_COUNTER[0]) + ".000001"})
         elif method in ("reactions.add", "reactions.remove"):
             self.reply({"ok": True})
         elif method == "reactions.get":
@@ -238,6 +243,53 @@ JSON
   [ "$(printf '%s\n' "$threads" | grep -c 'must not reach slack')" = "0" ] \
     || fail "a reply to a non-Slack note must not be posted"
   pass "firstmate replies post into the original Slack thread; foreign notes stay local"
+}
+
+test_poisoned_reply_skips_ahead() {
+  local home dir port first_id second_id posts dead status=0
+  home=$(make_home poison-reply)
+  dir="$TMP_ROOT/stub-poison-reply"
+  fake_slack_start "$dir"
+  port=$FAKE_PORT
+  cat > "$dir/config.json" <<JSON
+{"channels": {"$ACTION_CH": {"messages": [
+  {"ts": "400.000100", "user": "$CAPTAIN", "text": "first task"},
+  {"ts": "400.000200", "user": "$CAPTAIN", "text": "second task"}
+]}}, "captain_reactions": []}
+JSON
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
+  expect_code 0 "$status" "bridge ran clean"
+  first_id=$(FM_HOME="$home" bash "$INBOX" receipts --all-pending --all-handled \
+    | jq -r --arg rid "$ACTION_CH:400.000100" '[.pending[], .handled[]] | map(select(.request_id == $rid)) | .[0].id // ""')
+  second_id=$(FM_HOME="$home" bash "$INBOX" receipts --all-pending --all-handled \
+    | jq -r --arg rid "$ACTION_CH:400.000200" '[.pending[], .handled[]] | map(select(.request_id == $rid)) | .[0].id // ""')
+  [ -n "$first_id" ] && [ -n "$second_id" ] || fail "fixture notes missing"
+  FM_HOME="$home" bash "$INBOX" reply "$first_id" "first answer" >/dev/null 2>&1 \
+    || fail "fixture reply 1 failed"
+  FM_HOME="$home" bash "$INBOX" reply "$second_id" "second answer" >/dev/null 2>&1 \
+    || fail "fixture reply 2 failed"
+  cat > "$dir/config.json" <<JSON
+{"channels": {"$ACTION_CH": {"messages": [
+  {"ts": "400.000100", "user": "$CAPTAIN", "text": "first task"},
+  {"ts": "400.000200", "user": "$CAPTAIN", "text": "second task"}
+]}}, "captain_reactions": [],
+ "post_fails": [{"thread_ts": "400.000100", "error": "channel_not_found"}]}
+JSON
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
+  expect_code 0 "$status" "bridge ran clean with a poisoned head reply"
+  posts=$(calls_matching "$dir" "chat.postMessage")
+  assert_contains "$posts" '"thread_ts":"400.000200","text":"second answer"' \
+    "a later reply must still deliver past a permanently failed head reply"
+  dead=$(jq -r --arg id "$first_id" '.deadReplies[$id] // ""' "$(bridge_state "$home")")
+  assert_contains "$dead" "channel_not_found" "the poisoned reply must be recorded with its error"
+  [ "$(grep -c 'failed permanently' "$home/bridge.err")" = "1" ] \
+    || fail "the poisoned reply must be logged once"
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
+  expect_code 0 "$status" "second bridge run clean"
+  posts=$(calls_matching "$dir" "chat.postMessage")
+  [ "$(printf '%s\n' "$posts" | grep -c 'second answer')" = "1" ] \
+    || fail "a delivered reply must not repost and the poisoned one must not retry"
+  pass "a permanently failed reply is recorded and skipped; later replies flow"
 }
 
 test_alert_channel_routing_and_pending_marker() {
@@ -390,6 +442,7 @@ printf '{}\n' > "$TMP_ROOT/empty-snap.json"
 test_wrapper_refuses_without_config
 test_allowlist_rejection_and_idempotent_inbound
 test_threaded_reply_delivery
+test_poisoned_reply_skips_ahead
 test_alert_channel_routing_and_pending_marker
 test_reaction_resolution_transition
 test_unattended_escalation_and_captain_ack
