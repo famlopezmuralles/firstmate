@@ -99,6 +99,7 @@ def parse_msg(path):
     with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     at = None
+    is_faf = False
     body = text
     if text.startswith("schema="):
         head, sep, rest = text.partition("\n--\n")
@@ -106,12 +107,16 @@ def parse_msg(path):
             for line in head.splitlines():
                 if line.startswith("at="):
                     at = line[3:].strip()
+                elif line.strip() == "delivery=fire-and-forget":
+                    is_faf = True
             body = rest
         else:
             body = ""
             for line in text.splitlines():
                 if line.startswith("at="):
                     at = line[3:].strip()
+                elif line.strip() == "delivery=fire-and-forget":
+                    is_faf = True
     epoch = None
     if at:
         try:
@@ -120,7 +125,7 @@ def parse_msg(path):
             epoch = None
     if epoch is None:
         epoch = os.path.getmtime(path)
-    return body.strip(), epoch
+    return body.strip(), epoch, is_faf
 
 
 def read_sidecar(path):
@@ -183,7 +188,7 @@ def collect(state_dir):
                     if f.endswith(".msg") and os.path.isfile(os.path.join(handled_dir, f))
                 )
             for fname in pending:
-                body, epoch = parse_msg(os.path.join(inbox, fname))
+                body, epoch, is_faf = parse_msg(os.path.join(inbox, fname))
                 state = "pending"
                 quals = []
                 if fname in ring:
@@ -192,7 +197,7 @@ def collect(state_dir):
                     quals.append("escalated")
                 if retry == fname:
                     quals.append("retry-owed")
-                if "delivery=fire-and-forget" in body:
+                if is_faf:
                     state = "fire-and-forget"
                 if quals:
                     state += " (" + ", ".join(quals) + ")"
@@ -201,7 +206,7 @@ def collect(state_dir):
                              "corr": m.group(1) if m else "", "state": state,
                              "body": body})
             for fname in handled:
-                body, epoch = parse_msg(os.path.join(handled_dir, fname))
+                body, epoch, _is_faf = parse_msg(os.path.join(handled_dir, fname))
                 m = CORR_RE.search(body)
                 rows.append({"dir": "out", "epoch": epoch, "ts": fmt_ts(epoch),
                              "corr": m.group(1) if m else "", "state": "handled",
@@ -331,7 +336,7 @@ if(POLL_SECS>0){__POLLJS__}
 def render_page(payload, refresh):
     initial = json.dumps(payload).replace("<", "\\u003c")
     polljs = "setInterval(poll,%s*1000);" % refresh if refresh != "0" else ""
-    return PAGE_TEMPLATE.replace("__INITIAL__", initial).replace("__POLL__", refresh).replace("__POLLJS__", polljs)
+    return PAGE_TEMPLATE.replace("__POLLJS__", polljs).replace("__POLL__", refresh).replace("__INITIAL__", initial)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -361,8 +366,11 @@ class Handler(BaseHTTPRequestHandler):
 if MODE == "serve":
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
 else:
+    payload = collect(STATE_DIR)
     with open(sys.argv[4], "w", encoding="utf-8") as fh:
-        fh.write(render_page(collect(STATE_DIR), REFRESH) + "\n")
+        fh.write(render_page(payload, REFRESH) + "\n")
+    with open(os.path.join(os.path.dirname(sys.argv[4]), "events.json"), "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(payload))
     print("page: %s" % sys.argv[4])
 PYEOF
 }
