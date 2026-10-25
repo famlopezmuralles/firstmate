@@ -573,6 +573,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/slack-bridge.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/watcher-continuity.md",
       "audience": "operator-current"
     },
