@@ -77,6 +77,11 @@ const MARK_PENDING = "bell";
 const MARK_PROGRESS = "hammer_and_wrench";
 const MARK_DONE = "white_check_mark";
 const MARK_UNATTENDED = "alarm_clock";
+// Bot markers on inbound captain messages: inbox_tray when the message is
+// filed as a note, white_check_mark when firstmate's reply lands in its
+// thread. Neither clashes with the captain's eyes (silence) or zzz (snooze).
+const MARK_RECEIVED = "inbox_tray";
+const MARK_REPLIED = "white_check_mark";
 const CAPTAIN_ACK = "eyes";
 const CAPTAIN_SNOOZE = "zzz";
 const PERMANENT_POST_ERRORS = new Set([
@@ -153,6 +158,9 @@ function emptyState() {
     alerts: {},
     deadReplies: {},
     botUserId: "",
+    // False until the first successful fleet read seeds every current
+    // record as a silent baseline (fresh homes only; see alertPass).
+    alertBaseline: false,
   };
 }
 
@@ -250,6 +258,18 @@ async function inboundMessage(cfgv, state, event) {
   } else {
     log(`note ${json.id} ${json.outcome} from ${rid}`);
   }
+  // Best effort: mark the Slack message received so the sender knows it
+  // arrived even while the answer is minutes away. A marker failure never
+  // blocks the filed note.
+  try {
+    await slackApi(cfgv, "reactions.add", {
+      channel: event.channel,
+      timestamp: event.ts,
+      name: MARK_RECEIVED,
+    });
+  } catch (e) {
+    log(`received marker failed for ${rid}: ${e.message}`);
+  }
   return true;
 }
 
@@ -294,6 +314,17 @@ async function replyPass(cfgv, state) {
           text: reply.body,
         });
         log(`reply for ${reply.id} posted to ${coords.channel} thread ${coords.ts}`);
+        // Best effort: mark the original message replied. A marker failure
+        // never unposts the delivered reply.
+        try {
+          await slackApi(cfgv, "reactions.add", {
+            channel: coords.channel,
+            timestamp: coords.ts,
+            name: MARK_REPLIED,
+          });
+        } catch (e) {
+          log(`replied marker failed for ${reply.id}: ${e.message}`);
+        }
       } catch (e) {
         const code = e && e.slack && e.slack.error;
         if (code && PERMANENT_POST_ERRORS.has(code)) {
@@ -454,6 +485,14 @@ async function reconcileAlerts(cfgv, state, desired, absenceResolves) {
       if (want.resolved || !want.channel) continue;
       alert = await postAlert(cfgv, state, key, want.cls, want.channel, alertText(want.cls, want.row, cfgv, want.extra));
     }
+    if (!alert.ts) {
+      // Silent baseline entry from the first start: it has no Slack message,
+      // so there is nothing to mark or resolve through the API. Still
+      // present means still baselined; resolved means drop it silently, and
+      // a later reappearance posts as a new alert through the !alert branch.
+      if (want.resolved) delete state.alerts[key];
+      continue;
+    }
     if (want.resolved) {
       await finishAlert(cfgv, alert);
       continue;
@@ -502,6 +541,10 @@ async function reconcileAlerts(cfgv, state, desired, absenceResolves) {
   if (absenceResolves) {
     for (const alert of Object.values(state.alerts)) {
       if (!desired.has(alert.key) && !alert.done) {
+        if (!alert.ts) {
+          delete state.alerts[alert.key];
+          continue;
+        }
         await finishAlert(cfgv, alert);
         log(`alert ${alert.key} resolved by absence from its record`);
       }
@@ -512,6 +555,68 @@ async function reconcileAlerts(cfgv, state, desired, absenceResolves) {
   for (const [key, alert] of Object.entries(state.alerts)) {
     if (alert.done && alert.postedEpoch < cutoff) delete state.alerts[key];
   }
+}
+
+function plural(n, one, many) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+// One short summary per channel for the first-start baseline: counts per
+// class, never record bodies. Returns null when the channel baselined nothing.
+function baselineSummary(role, tally) {
+  const parts = [];
+  if (role === "action") {
+    if (tally.decision) parts.push(plural(tally.decision, "decision", "decisions"));
+    if (tally.pr) parts.push(plural(tally.pr, "PR", "PRs"));
+  } else {
+    if (tally.stuck) parts.push(plural(tally.stuck, "stuck worker", "stuck workers"));
+    if (tally.disk) parts.push("disk over threshold");
+    if (tally.wedge) parts.push(plural(tally.wedge, "wedge alarm", "wedge alarms"));
+  }
+  if (parts.length === 0) return null;
+  return `Bridge baseline: ${parts.join(", ")} already recorded; only new ones will alert individually.`;
+}
+
+// The very first successful fleet read seeds every current record as a silent
+// baseline instead of alerting each one, then posts one short summary per
+// channel with counts per class. Only records that appear after the baseline
+// post individual alerts. Homes with an existing state file migrated from
+// before this baseline existed keep their posted alerts and skip seeding.
+async function seedBaseline(cfgv, state, desired) {
+  const now = Math.floor(Date.now() / 1000);
+  const tally = { action: { decision: 0, pr: 0 }, status: { stuck: 0, disk: 0, wedge: 0 } };
+  for (const [key, want] of desired) {
+    if (want.resolved || !want.channel) continue;
+    if (state.alerts[key]) continue;
+    state.alerts[key] = {
+      key,
+      cls: want.cls,
+      channel: want.channel,
+      ts: "",
+      postedEpoch: now,
+      marker: "",
+      repeats: 0,
+      silenced: true,
+      snoozeUntil: 0,
+      done: false,
+      baseline: true,
+    };
+    log(`alert ${key} baselined silently on first start`);
+    const bucket = want.channel === cfgv.actionChannel ? tally.action : tally.status;
+    if (bucket && Object.hasOwn(bucket, want.cls)) bucket[want.cls] += 1;
+  }
+  for (const [role, channel, bucket] of [["action", cfgv.actionChannel, tally.action], ["status", cfgv.statusChannel, tally.status]]) {
+    if (!channel) continue;
+    const text = baselineSummary(role, bucket);
+    if (!text) continue;
+    try {
+      await slackApi(cfgv, "chat.postMessage", { channel, text });
+      log(`baseline summary posted to ${channel}`);
+    } catch (e) {
+      log(`baseline summary failed for ${channel}: ${e.message}`);
+    }
+  }
+  state.alertBaseline = true;
 }
 
 async function alertPass(cfgv, state) {
@@ -584,6 +689,8 @@ async function alertPass(cfgv, state) {
   }
   // Absence resolution only when the fleet read succeeded: a failed read
   // must never resolve anything (it proves nothing about the records).
+  // A failed read also defers the first-start baseline to the next cycle.
+  if (snap !== null && !state.alertBaseline) await seedBaseline(cfgv, state, desired);
   await reconcileAlerts(cfgv, state, desired, snap !== null);
 }
 
@@ -633,6 +740,7 @@ async function reactionPass(cfgv, state) {
   }
   for (const alert of Object.values(state.alerts)) {
     if (alert.done || alert.silenced) continue;
+    if (!alert.ts) continue; // silent baseline entry: no Slack message to read back
     try {
       const json = await slackApi(cfgv, "reactions.get", {
         channel: alert.channel,
@@ -855,6 +963,13 @@ async function main() {
       process.exit(1);
     }
     const state = loadState();
+    // Homes with a state file from before the baseline existed keep their
+    // posted alerts and never seed: only a truly fresh home baselines.
+    try {
+      if (fs.existsSync(STATE_FILE) && !state.alertBaseline) state.alertBaseline = true;
+    } catch {
+      /* a stat failure must not block the bridge */
+    }
     if (transport === "poll") {
       await pollLoop(cfgv, state, once);
     } else {

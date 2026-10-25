@@ -106,7 +106,11 @@ class H(BaseHTTPRequestHandler):
                 self.reply({"ok": True, "channel": params.get("channel", ""),
                             "ts": str(TS_COUNTER[0]) + ".000001"})
         elif method in ("reactions.add", "reactions.remove"):
-            self.reply({"ok": True})
+            fails = cfg.get("reaction_fails", [])
+            if method == "reactions.add" and params.get("name", "") in fails:
+                self.reply({"ok": False, "error": "invalid_name"})
+            else:
+                self.reply({"ok": True})
         elif method == "reactions.get":
             channel = params.get("channel", "")
             ts = params.get("timestamp", "")
@@ -298,6 +302,10 @@ test_alert_channel_routing_and_pending_marker() {
   dir="$TMP_ROOT/stub-routing"
   fake_slack_start "$dir"
   port=$FAKE_PORT
+  # Establish the silent baseline on an empty fleet first, so the records
+  # below arrive after the baseline and post individual alerts.
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
+  expect_code 0 "$status" "baseline run clean"
   cat > "$TMP_ROOT/snap-routing.json" <<JSON
 {"in_flight": [],
  "decisions_open": [{"id": "task-dec", "key": "task-dec", "verb": "captain-hold",
@@ -334,6 +342,8 @@ JSON
   cat > "$TMP_ROOT/snap-closed.json" <<'JSON'
 {"in_flight": [], "decisions_open": [], "recorded_prs": [], "unhealthy_endpoints": []}
 JSON
+  # Empty baseline first, so the opened record below counts as new.
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
   bridge_once "$home" "$port" "$TMP_ROOT/snap-open.json" || status=$?
   bridge_once "$home" "$port" "$TMP_ROOT/snap-closed.json" || status=$?
   adds=$(calls_matching "$dir" "reactions.add")
@@ -356,6 +366,9 @@ test_unattended_escalation_and_captain_ack() {
   "verb": "captain-hold", "summary": "waiting", "owner": "(main)"}],
  "recorded_prs": [], "unhealthy_endpoints": []}
 JSON
+  # Empty baseline first, so the waiting record below counts as new.
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" \
+    FM_SLACK_UNATTENDED_SECS=0 FM_SLACK_REPEAT_MAX=1 || status=$?
   bridge_once "$home" "$port" "$TMP_ROOT/snap-unatt.json" \
     FM_SLACK_UNATTENDED_SECS=0 FM_SLACK_REPEAT_MAX=1 || status=$?
   # Age the alert past the unattended threshold and re-evaluate.
@@ -402,6 +415,8 @@ test_disk_alert_roundtrip() {
   dir="$TMP_ROOT/stub-disk"
   fake_slack_start "$dir"
   port=$FAKE_PORT
+  # Empty baseline first (disk under threshold, so nothing seeds).
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" FM_SLACK_DISK_PCT=100 || status=$?
   bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" FM_SLACK_DISK_PCT=0 || status=$?
   posts=$(calls_matching "$dir" "chat.postMessage")
   assert_contains "$posts" '{"channel":"'"$STATUS_CH"'","text":"Disk nearly full' \
@@ -430,6 +445,121 @@ test_wedge_alert_roundtrip() {
   pass "wedge alarms post to the status channel and resolve on recovered readiness"
 }
 
+test_inbound_received_and_reply_markers() {
+  local home dir port note_id reactions posts status=0
+  home=$(make_home markers)
+  dir="$TMP_ROOT/stub-markers"
+  fake_slack_start "$dir"
+  port=$FAKE_PORT
+  cat > "$dir/config.json" <<JSON
+{"channels": {"$ACTION_CH": {"messages": [
+  {"ts": "500.000100", "user": "$CAPTAIN", "text": "marker check please"}
+]}}, "captain_reactions": []}
+JSON
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" FM_SLACK_DISK_PCT=100 || status=$?
+  expect_code 0 "$status" "bridge ran clean"
+  note_id=$(inbox_notes "$home" | head -1)
+  [ -n "$note_id" ] || fail "fixture note missing"
+  reactions=$(calls_matching "$dir" "reactions.add")
+  assert_contains "$reactions" '{"channel":"'"$ACTION_CH"'","timestamp":"500.000100","name":"inbox_tray"}' \
+    "a filed captain message must carry the received marker right away"
+  FM_HOME="$home" bash "$INBOX" reply "$note_id" "marker answer" >/dev/null 2>&1 \
+    || fail "fixture reply failed"
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" FM_SLACK_DISK_PCT=100 || status=$?
+  expect_code 0 "$status" "second bridge run clean"
+  reactions=$(calls_matching "$dir" "reactions.add")
+  assert_contains "$reactions" '{"channel":"'"$ACTION_CH"'","timestamp":"500.000100","name":"white_check_mark"}' \
+    "a delivered reply must add the replied marker on the original message"
+  # A failing received marker must never block note filing.
+  jq '.reaction_fails = ["inbox_tray"]' "$dir/config.json" > "$dir/c.tmp" \
+    && mv "$dir/c.tmp" "$dir/config.json"
+  jq --arg ch "$ACTION_CH" '.channels[$ch].messages += [{"ts": "500.000200", "user": "'"$CAPTAIN"'", "text": "second marker check"}]' \
+    "$dir/config.json" > "$dir/c.tmp" && mv "$dir/c.tmp" "$dir/config.json"
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" FM_SLACK_DISK_PCT=100 || status=$?
+  expect_code 0 "$status" "bridge ran clean with a failing marker"
+  [ "$(inbox_notes "$home" | grep -c .)" = "2" ] \
+    || fail "the note must file even when its received marker fails"
+  pass "captain messages get a received marker, replies a replied marker, and marker failure never blocks filing"
+}
+
+test_direct_execution_proves_executable_bit() {
+  local home dir port status=0
+  home=$(make_home direct-exec)
+  dir="$TMP_ROOT/stub-direct-exec"
+  fake_slack_start "$dir"
+  port=$FAKE_PORT
+  [ -x "$BRIDGE" ] || fail "bin/fm-slack-bridge.sh must be executable"
+  cat > "$dir/config.json" <<JSON
+{"channels": {}, "captain_reactions": []}
+JSON
+  # Run through the kernel shebang, not through bash: this only works when
+  # the committed executable bit is set.
+  env FM_HOME="$home" \
+    FM_SLACK_API_URL="http://127.0.0.1:$port/api" \
+    FM_SLACK_SNAPSHOT_CMD="cat $TMP_ROOT/empty-snap.json" \
+    "$BRIDGE" run --transport poll --once 2>>"$home/bridge.err" || status=$?
+  expect_code 0 "$status" "direct execution ran clean"
+  [ -f "$(bridge_state "$home")" ] || fail "direct run must write bridge state"
+  pass "the wrapper runs directly through its shebang (executable bit set)"
+}
+
+test_first_start_baselines_with_summary() {
+  local home dir port posts summaries status=0
+  home=$(make_home baseline)
+  dir="$TMP_ROOT/stub-baseline"
+  fake_slack_start "$dir"
+  port=$FAKE_PORT
+  cat > "$dir/config.json" <<JSON
+{"channels": {}, "captain_reactions": []}
+JSON
+  cat > "$TMP_ROOT/snap-baseline.json" <<JSON
+{"in_flight": [],
+ "decisions_open": [{"id": "task-old-1", "key": "task-old-1", "verb": "captain-hold",
+                       "summary": "old choice one", "owner": "(main)"},
+                    {"id": "task-old-2", "key": "task-old-2", "verb": "captain-hold",
+                       "summary": "old choice two", "owner": "(main)"}],
+ "recorded_prs": [{"id": "task-old-pr", "url": "https://github.com/acme/widget/pull/7"}],
+ "unhealthy_endpoints": [{"id": "task-old-stuck", "target": "tmux:lane3", "exists": false, "agent": "dead"}]}
+JSON
+  bridge_once "$home" "$port" "$TMP_ROOT/snap-baseline.json" FM_SLACK_DISK_PCT=100 || status=$?
+  expect_code 0 "$status" "first bridge run clean"
+  posts=$(calls_matching "$dir" "chat.postMessage")
+  assert_contains "$posts" 'Bridge baseline: 2 decisions, 1 PR already recorded' \
+    "the first start must post one action-channel summary with counts per class"
+  assert_contains "$posts" 'Bridge baseline: 1 stuck worker already recorded' \
+    "the first start must post one status-channel summary with counts per class"
+  for text in "Decision needed:" "PR ready for review:" "Worker stopped responding:"; do
+    [ "$(printf '%s\n' "$posts" | grep -c "$text")" = "0" ] \
+      || fail "the first start must not post individual alerts ($text)"
+  done
+  [ "$(jq -r '.alertBaseline' "$(bridge_state "$home")")" = "true" ] \
+    || fail "the first start must record the baseline in bridge state"
+  [ "$(jq -r '[.alerts[] | select(.ts == "")] | length' "$(bridge_state "$home")")" = "4" ] \
+    || fail "every current record must seed one silent baseline entry"
+  # A record that appears after the baseline posts its own alert, once.
+  cat > "$TMP_ROOT/snap-baseline.json" <<JSON
+{"in_flight": [],
+ "decisions_open": [{"id": "task-old-1", "key": "task-old-1", "verb": "captain-hold",
+                       "summary": "old choice one", "owner": "(main)"},
+                    {"id": "task-old-2", "key": "task-old-2", "verb": "captain-hold",
+                       "summary": "old choice two", "owner": "(main)"},
+                    {"id": "task-new", "key": "task-new", "verb": "captain-hold",
+                       "summary": "fresh choice", "owner": "(main)"}],
+ "recorded_prs": [{"id": "task-old-pr", "url": "https://github.com/acme/widget/pull/7"}],
+ "unhealthy_endpoints": [{"id": "task-old-stuck", "target": "tmux:lane3", "exists": false, "agent": "dead"}]}
+JSON
+  bridge_once "$home" "$port" "$TMP_ROOT/snap-baseline.json" FM_SLACK_DISK_PCT=100 || status=$?
+  expect_code 0 "$status" "second bridge run clean"
+  posts=$(calls_matching "$dir" "chat.postMessage")
+  assert_contains "$posts" 'Decision needed: fresh choice (task task-new)' \
+    "a record after the baseline must post its own alert"
+  [ "$(printf '%s\n' "$posts" | grep -c 'Decision needed: old choice')" = "0" ] \
+    || fail "baselined records must stay silent on later cycles"
+  summaries=$(printf '%s\n' "$posts" | grep -c 'Bridge baseline')
+  [ "$summaries" = "2" ] || fail "later cycles must not repost the baseline summary"
+  pass "the first start baselines silently with one summary per channel; later records alert alone"
+}
+
 test_no_real_slack_network() {
   local hits
   hits=$(grep -h 'slack\.com' "$TMP_ROOT"/stub-*/calls.log 2>/dev/null | grep -c .)
@@ -442,10 +572,13 @@ printf '{}\n' > "$TMP_ROOT/empty-snap.json"
 test_wrapper_refuses_without_config
 test_allowlist_rejection_and_idempotent_inbound
 test_threaded_reply_delivery
+test_inbound_received_and_reply_markers
 test_poisoned_reply_skips_ahead
 test_alert_channel_routing_and_pending_marker
 test_reaction_resolution_transition
 test_unattended_escalation_and_captain_ack
 test_disk_alert_roundtrip
 test_wedge_alert_roundtrip
+test_direct_execution_proves_executable_bit
+test_first_start_baselines_with_summary
 test_no_real_slack_network

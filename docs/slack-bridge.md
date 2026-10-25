@@ -26,13 +26,17 @@ firstmate (durable notes, replies, records) ---------------+
   Replies to notes the bridge did not file are never delivered to Slack.
 - Alerts: the bridge posts event classes it reads from durable records to two configurable channels, and marks each alert with reactions as the records change.
   It never reads conversation memory, chat transcripts, or terminal panes.
+  On its very first start the bridge records every current record as a silent baseline instead of posting one alert per record.
+  It posts one short summary per configured channel with counts per class.
+  Only records that appear after the baseline post individual alerts.
 
 ## Setup (one-time, by the captain)
 
 1. Create a Slack app at `api.slack.com/apps` (from scratch, owned by you), and enable Socket Mode.
 2. Create an app-level token with the `connections:write` scope; that is the app token (`xapp-...`).
 3. Give the bot these OAuth scopes: `chat:write`, `reactions:read`, `reactions:write`, `channels:history`, `groups:history`, and `im:history`.
-4. Under Event Subscriptions, subscribe bot events to `message.channels`, `message.groups`, and `message.im`.
+4. Under Event Subscriptions, subscribe bot events to `message.channels`, `message.groups`, `message.im`, and `reaction_added`.
+The bridge reads your `eyes` and `zzz` reactions through `reaction_added` in Socket Mode (poll reads them back through `reactions.get`), so silence and snooze need that subscription plus the `reactions:read` scope above.
 5. Install the app to the workspace and copy the bot token (`xoxb-...`).
 6. Invite the bot to the two alert channels you want to use, and note their channel ids.
 7. Write the configuration into the home's gitignored `.env` (keys below).
@@ -88,9 +92,11 @@ The bot marks every alert from record state, never from conversation memory:
 - `alarm_clock` plus one thread notice when it stays unattended past `FM_SLACK_UNATTENDED_SECS`, repeated at most `FM_SLACK_REPEAT_MAX` times.
 
 Your reactions back on an alert may do only two things:
-
 - `eyes` acknowledges the alert as seen and silences further notices.
 - `zzz` snoozes it for `FM_SLACK_SNOOZE_SECS` (a day by default).
+
+Inbound messages carry the bot's own markers: `inbox_tray` on your message as soon as it is filed as a note, and `white_check_mark` on it once firstmate's reply lands in its thread.
+A failed marker never blocks filing or delivery.
 
 Every other reaction is ignored, and no reaction can ever approve a merge, a destructive action, or a decision.
 Approvals stay in firstmate's own channels.
