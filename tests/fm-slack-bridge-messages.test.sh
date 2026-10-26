@@ -299,9 +299,56 @@ test_no_real_slack_network() {
   pass "no test run reached real Slack"
 }
 
+test_large_log_baselines_then_posts_once() {
+  local home dir port posts size base count status=0
+  home=$(make_home largelog)
+  dir="$TMP_ROOT/stub-largelog"
+  fake_slack_start "$dir"
+  port=$FAKE_PORT
+  python3 - "$home" <<'PY'
+import os
+import sys
+home = sys.argv[1]
+d = os.path.join(home, "state", "task-big.inbox")
+os.makedirs(os.path.join(d, "handled"), exist_ok=True)
+chunk = "BASELINE-BIG-CHUNK-0123456789ABCDEF " * 800
+for i in range(50):
+    with open(os.path.join(d, "%03d.msg" % (i + 1)), "w") as f:
+        f.write("schema=fm-task-inbox.v1\nat=2026-10-26T10:00:00Z\n--\n%s %d\n" % (chunk, i))
+PY
+  size=$(bash "$ROOT/bin/fm-fleet-message-log.sh" --json --state-dir "$home/state" | wc -c | tr -d ' ')
+  [ "$size" -gt 1048576 ] || fail "fixture JSON must exceed 1 MB, got $size bytes"
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
+  expect_code 0 "$status" "large baseline run clean"
+  posts=$(message_posts "$dir")
+  [ -z "$posts" ] || fail "large first start must post nothing old, got: $posts"
+  grep -q "message log read failed" "$home/bridge.err" \
+    && fail "large log must read cleanly without a message log read failure"
+  base=$(jq -r '.messagesBaseline' "$(bridge_state "$home")")
+  [ "$base" = "true" ] || fail "large first start must record the messages baseline"
+  count=$(jq -r '.messagesPosted | length' "$(bridge_state "$home")")
+  [ "$count" = "50" ] || fail "baseline must record all 50 existing entries, got $count"
+  write_steer "$home" task-big pending 051.msg "2026-10-26T11:00:00Z" "fresh steer after big baseline LARGELOG-NEW-ENTRY-1 corr=largelog-1"
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
+  expect_code 0 "$status" "post-baseline run clean"
+  posts=$(message_posts "$dir")
+  [ "$(printf '%s\n' "$posts" | grep -c .)" = "1" ] || fail "expected exactly 1 post for the new entry, got: $posts"
+  assert_contains "$posts" "LARGELOG-NEW-ENTRY-1" "new entry post must carry its full text"
+  assert_contains "$posts" "largelog-1" "new entry post must carry the corr id"
+  case "$posts" in
+    *BASELINE-BIG-CHUNK*) fail "baseline text must stay baselined and never post" ;;
+  esac
+  bridge_once "$home" "$port" "$TMP_ROOT/empty-snap.json" || status=$?
+  expect_code 0 "$status" "rerun clean"
+  posts=$(message_posts "$dir")
+  [ "$(printf '%s\n' "$posts" | grep -c .)" = "1" ] || fail "delivered entry must not repost, got: $posts"
+  pass "a log larger than 1 MB baselines silently and a later entry posts once"
+}
+
 test_unconfigured_key_posts_nothing
 test_first_start_baselines_silently
 test_new_steer_and_status_post_once
 test_oversized_text_splits_with_marker
 test_slack_failure_retries
+test_large_log_baselines_then_posts_once
 test_no_real_slack_network

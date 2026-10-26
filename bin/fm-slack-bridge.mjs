@@ -59,6 +59,9 @@
  *   FM_SLACK_MESSAGES_LIMIT per-post character cap for message-log posts
  *                         (default 39000); oversized posts split into
  *                         marked parts.
+ *   FM_SLACK_MAXBUFFER      max bytes kept from a child JSON read
+ *                         (default 16777216); covers the message-log,
+ *                         snapshot, and inbox reads.
  *
  * State lives in $FM_HOME/data/slack-bridge/bridge/state.json. That is the
  * bridge's private directory under the gitignored data/ tree; the bridge
@@ -117,6 +120,23 @@ function envInt(name, fallback) {
   if (!raw) return fallback;
   const n = Number(raw);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
+
+// Generous cap for child JSON reads: the live message log already exceeds
+// Node's 1 MB spawnSync default, so every read that can plausibly pass 1 MB
+// uses this tunable instead of the default.
+function readMaxBuffer() {
+  return envInt("FM_SLACK_MAXBUFFER", 16 * 1024 * 1024) || 16 * 1024 * 1024;
+}
+
+// A buffer overflow or signal kill leaves status null, which reads exactly
+// like an ordinary non-zero exit unless the error and signal are reported.
+function childFailureDetail(res) {
+  const bits = [];
+  if (res.error) bits.push(`error ${res.error.message}`);
+  if (res.signal) bits.push(`signal ${res.signal}`);
+  bits.push(`exit ${res.status}`);
+  return bits.join(", ");
 }
 
 function cfg() {
@@ -234,6 +254,7 @@ function inbox(args) {
     encoding: "utf8",
     env: { ...process.env, FM_HOME: HOME },
     timeout: 60_000,
+    maxBuffer: readMaxBuffer(),
   });
   return { status: res.status, stdout: res.stdout || "", stderr: res.stderr || "" };
 }
@@ -453,7 +474,7 @@ async function readSnapshot() {
   const cmd = process.env.FM_SLACK_SNAPSHOT_CMD;
   let res;
   if (cmd) {
-    res = spawnSync("bash", ["-c", cmd], { encoding: "utf8", timeout: 120_000 });
+    res = spawnSync("bash", ["-c", cmd], { encoding: "utf8", timeout: 120_000, maxBuffer: readMaxBuffer() });
   } else {
     res = spawnSync(
       "bash",
@@ -464,11 +485,11 @@ async function readSnapshot() {
         "--all-recorded-prs",
         "--all-unhealthy",
       ],
-      { encoding: "utf8", timeout: 120_000, env: { ...process.env, FM_HOME: HOME } },
+      { encoding: "utf8", timeout: 120_000, env: { ...process.env, FM_HOME: HOME }, maxBuffer: readMaxBuffer() },
     );
   }
   if (res.status !== 0) {
-    log(`fleet snapshot read failed (exit ${res.status}); skipping alert pass`);
+    log(`fleet snapshot read failed (${childFailureDetail(res)}); skipping alert pass`);
     return null;
   }
   try {
@@ -723,10 +744,10 @@ function readMessageLog() {
     "bash",
     [path.join(REPO_ROOT, "bin", "fm-fleet-message-log.sh"), "--json",
      "--state-dir", path.join(HOME, "state")],
-    { encoding: "utf8", timeout: 120_000, env: { ...process.env, FM_HOME: HOME } },
+    { encoding: "utf8", timeout: 120_000, env: { ...process.env, FM_HOME: HOME }, maxBuffer: readMaxBuffer() },
   );
   if (res.status !== 0) {
-    log(`message log read failed (exit ${res.status}); skipping message pass`);
+    log(`message log read failed (${childFailureDetail(res)}); skipping message pass`);
     return null;
   }
   try {
