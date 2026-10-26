@@ -29,6 +29,14 @@
  *            that no listed durable record exposes (red CI, quota out of
  *            band, stalled validation, credential asks) are NOT covered and
  *            docs/slack-bridge.md says so explicitly.
+ *   messages the fleet message log (firstmate steers plus agent status
+ *            lines, read through `bin/fm-fleet-message-log.sh --json`, which
+ *            stays the single owner of entry identity and derivation) posts
+ *            each entry once, full text, to one optional channel. The first
+ *            start with the key set records every current entry as a silent
+ *            baseline and posts nothing old. Inbound captain notes and
+ *            outbound replies live outside those records, so message posts
+ *            cannot loop back into the channel.
  *   reactions the bot marks each alert from record state: bell (pending),
  *            hammer_and_wrench (in progress), white_check_mark (resolved),
  *            alarm_clock (still unattended, with a capped repeat notice).
@@ -48,6 +56,9 @@
  *   FM_SLACK_API_URL      override https://slack.com/api for the REST client.
  *   FM_SLACK_SNAPSHOT_CMD command whose stdout is the fleet snapshot JSON
  *                         (default runs bin/fm-bearings-snapshot.sh).
+ *   FM_SLACK_MESSAGES_LIMIT per-post character cap for message-log posts
+ *                         (default 39000); oversized posts split into
+ *                         marked parts.
  *
  * State lives in $FM_HOME/data/slack-bridge/bridge/state.json. That is the
  * bridge's private directory under the gitignored data/ tree; the bridge
@@ -126,6 +137,7 @@ function cfg() {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean),
+    messagesChannel: process.env.FM_SLACK_MESSAGES_CHANNEL || "",
     apiUrl: process.env.FM_SLACK_API_URL || "https://slack.com/api",
     snapshotCmd: process.env.FM_SLACK_SNAPSHOT_CMD || "",
     pollSecs: envInt("FM_SLACK_POLL_SECS", DEFAULTS.pollSecs),
@@ -161,6 +173,12 @@ function emptyState() {
     // False until the first successful fleet read seeds every current
     // record as a silent baseline (fresh homes only; see alertPass).
     alertBaseline: false,
+    // False until the first successful message-log read seeds every current
+    // entry as a silent baseline; see messagesPass.
+    messagesBaseline: false,
+    // message-log entry id -> epoch seconds, so reposts never happen and old
+    // ids can age out once their records are gone.
+    messagesPosted: {},
   };
 }
 
@@ -694,6 +712,111 @@ async function alertPass(cfgv, state) {
   await reconcileAlerts(cfgv, state, desired, snap !== null);
 }
 
+// ------------------------------------------------- fleet message log ----
+
+// Reads the fleet message log through bin/fm-fleet-message-log.sh --json,
+// which stays the single owner of entry identity, direction, timestamp, and
+// correlation derivation. This pass only reads state/; it never writes to
+// it and never rings, acks, or steers anything.
+function readMessageLog() {
+  const res = spawnSync(
+    "bash",
+    [path.join(REPO_ROOT, "bin", "fm-fleet-message-log.sh"), "--json",
+     "--state-dir", path.join(HOME, "state")],
+    { encoding: "utf8", timeout: 120_000, env: { ...process.env, FM_HOME: HOME } },
+  );
+  if (res.status !== 0) {
+    log(`message log read failed (exit ${res.status}); skipping message pass`);
+    return null;
+  }
+  try {
+    return JSON.parse(res.stdout);
+  } catch (e) {
+    log(`message log parse failed: ${e.message}`);
+    return null;
+  }
+}
+
+// One post per entry: direction, agent id, timestamp, corr id when present,
+// and steer acknowledgement state for firstmate-to-agent entries.
+function formatMessagePost(agent, row) {
+  const dir = row.dir === "out" ? "Firstmate to agent" : "Agent to firstmate";
+  const head = [`fleet log | ${dir}`, `agent ${agent}`, row.ts || "unknown time"];
+  if (row.corr) head.push(`corr ${row.corr}`);
+  if (row.state) head.push(row.dir === "out" ? `steer ${row.state}` : row.state);
+  return `${head.join(" | ")}\n${row.body || ""}`;
+}
+
+// Splits only past the per-post cap; every part carries its (part i/n)
+// marker so the split says so in the channel.
+function splitMessagePost(text, limit) {
+  if (text.length <= limit) return [text];
+  const width = Math.max(64, limit - 32); // room for the part marker below
+  const raw = [];
+  let rest = text;
+  while (rest.length > width) {
+    let cut = rest.lastIndexOf("\n", width);
+    if (cut < width / 2) cut = width;
+    raw.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\n/, "");
+    if (!rest) break;
+  }
+  if (rest) raw.push(rest);
+  return raw.map((p, i) => `${p}\n(part ${i + 1}/${raw.length})`);
+}
+
+// Publishes each message-log entry once, oldest first. The first successful
+// read with the key set records every current entry as a silent baseline
+// and posts nothing old. A failed post breaks the queue without marking
+// anything, so a burst waits for the next cycle instead of dropping silently.
+// Logs carry entry ids, the channel, and outcomes only - never bodies.
+async function messagesPass(cfgv, state) {
+  const channel = cfgv.messagesChannel;
+  if (!channel) return; // off without its key
+  let payload;
+  try {
+    payload = readMessageLog();
+  } catch (e) {
+    log(`message log read failed: ${e.message}`);
+    return;
+  }
+  if (!payload) return; // a failed read skips this cycle; nothing is marked
+  const entries = [];
+  for (const agent of payload.agents || []) {
+    for (const row of agent.rows || []) {
+      if (!row || !row.id) continue;
+      entries.push({ agent: agent.id, row });
+    }
+  }
+  entries.sort((a, b) => (a.row.epoch || 0) - (b.row.epoch || 0));
+  state.messagesPosted = state.messagesPosted || {};
+  if (!state.messagesBaseline) {
+    for (const e of entries) state.messagesPosted[e.row.id] = e.row.epoch || 0;
+    state.messagesBaseline = true;
+    log(`messages baseline: ${entries.length} existing entries recorded silently for ${channel}`);
+    return;
+  }
+  const limit = envInt("FM_SLACK_MESSAGES_LIMIT", 39000) || 39000;
+  const seen = new Set(entries.map((e) => e.row.id));
+  for (const e of entries) {
+    if (state.messagesPosted[e.row.id] !== undefined) continue;
+    const parts = splitMessagePost(formatMessagePost(e.agent, e.row), limit);
+    try {
+      for (const text of parts) await slackApi(cfgv, "chat.postMessage", { channel, text });
+    } catch (err) {
+      log(`message post failed for ${e.row.id}: ${err.message}`);
+      break;
+    }
+    state.messagesPosted[e.row.id] = e.row.epoch || 0;
+    log(`message ${e.row.id} posted to ${channel} in ${parts.length} part(s)`);
+  }
+  // Retention: drop posted ids whose records have been gone over 30 days.
+  const cutoff = Date.now() / 1000 - 30 * 86400;
+  for (const [id, epoch] of Object.entries(state.messagesPosted)) {
+    if (!seen.has(id) && epoch < cutoff) delete state.messagesPosted[id];
+  }
+}
+
 // ---------------------------------------------------- captain reactions ----
 
 // A captain reaction may ONLY acknowledge (silence) or snooze an alert.
@@ -864,6 +987,7 @@ async function socketLoop(cfgv, state, once) {
         try {
           await replyPass(cfgv, state);
           await alertPass(cfgv, state);
+          await messagesPass(cfgv, state);
           await reactionPass(cfgv, state); // socket covers live alerts; harmless re-read
           saveState(state);
         } catch (e) {
@@ -901,6 +1025,7 @@ async function pollLoop(cfgv, state, once) {
       await pollInbound(cfgv, state);
       await replyPass(cfgv, state);
       await alertPass(cfgv, state);
+      await messagesPass(cfgv, state);
       await reactionPass(cfgv, state);
       saveState(state);
     } catch (e) {
