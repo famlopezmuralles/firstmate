@@ -58,7 +58,7 @@ The bridge does nothing unless its keys are present - an unconfigured home refus
 | `slack-messages-channel` | `FM_SLACK_MESSAGES_CHANNEL` | Fleet message-log channel id. Optional; message-log posts are off without it. |
 | `slack-poll-channels` | `FM_SLACK_POLL_CHANNELS` | Inbound channels for the poll transport. Optional; defaults to both alert channels. |
 
-Optional tuning environment variables (no `.env` counterparts): `FM_SLACK_POLL_SECS` (poll cycle, 10), `FM_SLACK_ALERT_SECS` (alert cycle, 60), `FM_SLACK_UNATTENDED_SECS` (unattended threshold, 1800), `FM_SLACK_REPEAT_MAX` (capped repeat notices, 2), `FM_SLACK_SNOOZE_SECS` (snooze duration, 86400), `FM_SLACK_DISK_PCT` (disk threshold, 90), `FM_SLACK_DISK_PATH` (checked filesystem, `/`).
+Optional tuning environment variables (no `.env` counterparts): `FM_SLACK_POLL_SECS` (poll cycle, 10), `FM_SLACK_ALERT_SECS` (alert cycle, 60), `FM_SLACK_UNATTENDED_SECS` (unattended threshold, 1800), `FM_SLACK_REPEAT_MAX` (capped repeat notices, 2), `FM_SLACK_SNOOZE_SECS` (snooze duration, 86400), `FM_SLACK_DISK_PCT` (disk threshold, 90), `FM_SLACK_DISK_PATH` (checked filesystem, `/`), `FM_SLACK_MAXBUFFER` (child JSON read cap in bytes, 16777216).
 
 ## Alert channels and coverage
 
