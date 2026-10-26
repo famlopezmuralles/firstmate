@@ -26,6 +26,7 @@
 #                                                    user ids allowed inbound
 #   slack-action-channel   FM_SLACK_ACTION_CHANNEL   action channel id.      optional
 #   slack-status-channel   FM_SLACK_STATUS_CHANNEL   status channel id.      optional
+#   slack-messages-channel FM_SLACK_MESSAGES_CHANNEL fleet message-log channel optional
 #   slack-poll-channels    FM_SLACK_POLL_CHANNELS    inbound channels for    optional
 #                                                    the poll transport
 #
@@ -81,6 +82,7 @@ case "$CMD" in
     export_resolved FM_SLACK_ALLOW_USERS slack-allow-users
     export_resolved FM_SLACK_ACTION_CHANNEL slack-action-channel
     export_resolved FM_SLACK_STATUS_CHANNEL slack-status-channel
+    export_resolved FM_SLACK_MESSAGES_CHANNEL slack-messages-channel
     export_resolved FM_SLACK_POLL_CHANNELS slack-poll-channels
     require_config FM_SLACK_BOT_TOKEN "slack-bot-token"
     require_config FM_SLACK_ALLOW_USERS "slack-allow-users (comma-separated Slack user ids)"

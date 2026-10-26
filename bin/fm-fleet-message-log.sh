@@ -30,6 +30,10 @@
 # Message bodies can hold private project and customer details: output
 # defaults to gitignored data/ and must never be committed. Any server binds
 # 127.0.0.1 only and refuses anything else.
+# A third mode, --json, prints the same entries payload as JSON to stdout for
+# record consumers (the Slack bridge); the bridge reuses this output instead
+# of re-parsing the records, so this script stays the single owner of entry
+# identity, direction, timestamp, and correlation derivation.
 #
 # Usage:
 #   fm-fleet-message-log.sh [--state-dir DIR] [--out DIR] [--refresh SECS] [--serve [--port PORT]]
@@ -38,6 +42,7 @@
 #   --out DIR        build writes index.html into DIR (default $FM_HOME/data/fleet-message-log)
 #   --refresh SECS   page poll interval, 0 disables live polling (default 5)
 #   --serve          serve the transcript over HTTP bound to 127.0.0.1 (default port 8471)
+#   --json           print the entries payload as JSON to stdout for record consumers
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -48,6 +53,7 @@ STATE_DIR="$FM_HOME/state"
 OUT_DIR="$FM_HOME/data/fleet-message-log"
 REFRESH=5
 SERVE=0
+JSON=0
 PORT=8471
 
 usage() {
@@ -61,6 +67,7 @@ while [ $# -gt 0 ]; do
     --out) OUT_DIR="${2:?--out needs a directory}"; shift 2 ;;
     --refresh) REFRESH="${2:?--refresh needs seconds}"; shift 2 ;;
     --serve) SERVE=1; shift ;;
+    --json) JSON=1; shift ;;
     --port) PORT="${2:?--port needs a port}"; shift 2 ;;
     *) echo "fm-fleet-message-log: unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -75,6 +82,7 @@ mkdir -p "$OUT_DIR"
 
 run_py() {
   python3 - "$@" <<'PYEOF'
+import hashlib
 import html
 import json
 import os
@@ -85,7 +93,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MODE = sys.argv[1]
 STATE_DIR = sys.argv[2]
-REFRESH = sys.argv[3]
+REFRESH = sys.argv[3] if len(sys.argv) > 3 else "5"
 if MODE == "serve":
     PORT = int(sys.argv[4])
 
@@ -204,27 +212,29 @@ def collect(state_dir):
                 m = CORR_RE.search(body)
                 rows.append({"dir": "out", "epoch": epoch, "ts": fmt_ts(epoch),
                              "corr": m.group(1) if m else "", "state": state,
-                             "body": body})
+                             "body": body, "id": "out:%s:%s" % (agent, fname)})
             for fname in handled:
                 body, epoch, _is_faf = parse_msg(os.path.join(handled_dir, fname))
                 m = CORR_RE.search(body)
                 rows.append({"dir": "out", "epoch": epoch, "ts": fmt_ts(epoch),
                              "corr": m.group(1) if m else "", "state": "handled",
-                             "body": body})
+                             "body": body, "id": "out:%s:%s" % (agent, fname)})
         try:
             with open(status_path, encoding="utf-8", errors="replace") as fh:
                 lines = [ln.rstrip("\n") for ln in fh if ln.strip()]
         except OSError:
             lines = []
         mtime = os.path.getmtime(status_path) if os.path.isfile(status_path) else 0
-        for line in lines:
+        for idx, line in enumerate(lines, 1):
             m = AT_RE.search(line)
             epoch = float(m.group(1)) if m else mtime
             c = CORR_RE.search(line)
             v = VERB_RE.search(line)
+            digest = hashlib.sha1(line.encode("utf-8", "replace")).hexdigest()[:12]
             rows.append({"dir": "in", "epoch": epoch, "ts": fmt_ts(epoch),
                          "corr": c.group(1) if c else "",
-                         "state": v.group(1) if v else "note", "body": line})
+                         "state": v.group(1) if v else "note", "body": line,
+                         "id": "in:%s:%d:%s" % (agent, idx, digest)})
         rows.sort(key=lambda r: r["epoch"], reverse=True)
         payload_agents.append({"id": agent, "kind": kind, "rows": rows})
     payload_agents.sort(
@@ -365,6 +375,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if MODE == "serve":
     ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+elif MODE == "json":
+    print(json.dumps(collect(STATE_DIR)))
 else:
     payload = collect(STATE_DIR)
     with open(sys.argv[4], "w", encoding="utf-8") as fh:
@@ -375,7 +387,9 @@ else:
 PYEOF
 }
 
-if [ "$SERVE" -eq 1 ]; then
+if [ "$JSON" -eq 1 ]; then
+  run_py json "$STATE_DIR"
+elif [ "$SERVE" -eq 1 ]; then
   echo "serve: http://127.0.0.1:$PORT/ (loopback only, Ctrl-C to stop)"
   run_py serve "$STATE_DIR" "$REFRESH" "$PORT"
 else
